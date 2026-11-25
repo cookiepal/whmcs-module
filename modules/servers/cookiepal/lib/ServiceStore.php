@@ -13,7 +13,8 @@ use WHMCS\Database\Capsule;
 /**
  * The mod_cookiepal_services table, through WHMCS's Capsule. Created on first use.
  *
- * service_id is the WHMCS service (tblhosting.id). customer_id and domain_id are what the
+ * service_id is the WHMCS service (tblhosting.id), and server_id the WHMCS server (tblservers.id) it was
+ * created on, which holds the agency API key that owns its customer. customer_id and domain_id are what the
  * CookiePal API returned on create. Times are UTC. terminated_at is set once TerminateAccount
  * succeeds; the row is kept so the admin can still see which CookiePal website the service was.
  */
@@ -37,14 +38,31 @@ final class ServiceStore
         return $this->record(Capsule::table(self::TABLE)->where('service_id', $serviceId)->first());
     }
 
-    /** The client's newest service that isn't terminated, other than $exceptServiceId. */
-    public function findLiveForClient(int $clientId, int $exceptServiceId): ?ServiceRecord
+    /**
+     * The client's newest service on this CookiePal server that isn't terminated, other than $exceptServiceId.
+     * Only those share a customer: another server can hold another agency's key.
+     */
+    public function findLiveForClient(int $clientId, int $serverId, int $exceptServiceId): ?ServiceRecord
     {
         $this->ensureTable();
 
         return $this->record(Capsule::table(self::TABLE)
             ->where('client_id', $clientId)
+            ->where('server_id', $serverId)
             ->where('service_id', '!=', $exceptServiceId)
+            ->whereNull('terminated_at')
+            ->orderBy('created_at', 'desc')
+            ->first());
+    }
+
+    /** The client's newest live service on any CookiePal server other than $serverId. */
+    public function findLiveForClientOnOtherServer(int $clientId, int $serverId): ?ServiceRecord
+    {
+        $this->ensureTable();
+
+        return $this->record(Capsule::table(self::TABLE)
+            ->where('client_id', $clientId)
+            ->where('server_id', '!=', $serverId)
             ->whereNull('terminated_at')
             ->orderBy('created_at', 'desc')
             ->first());
@@ -95,12 +113,13 @@ final class ServiceStore
     }
 
     /** Inserts the service's row, or replaces the one it has (live or terminated). */
-    public function save(int $serviceId, int $clientId, string $customerId, string $domainId): void
+    public function save(int $serviceId, int $serverId, int $clientId, string $customerId, string $domainId): void
     {
         $this->ensureTable();
         Capsule::table(self::TABLE)->updateOrInsert(
             ['service_id' => $serviceId],
             [
+                'server_id' => $serverId,
                 'client_id' => $clientId,
                 'customer_id' => $customerId,
                 'domain_id' => $domainId,
@@ -140,6 +159,7 @@ final class ServiceStore
             try {
                 $schema->create(self::TABLE, function ($table): void {
                     $table->unsignedInteger('service_id')->primary();
+                    $table->unsignedInteger('server_id');
                     $table->unsignedInteger('client_id')->index();
                     $table->string('customer_id', 64)->index();
                     $table->string('domain_id', 255);

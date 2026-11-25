@@ -155,6 +155,20 @@ final class ClientAreaTest extends ModuleTestCase
         $this->assertSame(['ClientArea', 'RuntimeException: boom'], [$last['action'], $last['response']]);
     }
 
+    public function testACustomerGoneFromCookiePalShowsTheMissingNotice(): void
+    {
+        $this->seedService();
+        $this->transport->expect(
+            'GET',
+            $this->customerPath(),
+            404,
+            ['message' => 'customer not found', 'code' => 'CUSTOMER_NOT_FOUND']
+        );
+
+        $this->assertSame('missing', cookiepal_ClientArea($this->params())['templateVariables']['cookiepal']['state']);
+        $this->assertCount(1, $this->transport->requests);
+    }
+
     public function testTheClientAreaForAWebsiteNoLongerThere(): void
     {
         $this->seedService();

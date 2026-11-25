@@ -98,6 +98,32 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
     }
 
+    public function testAServiceOnAnotherServerDoesNotShareItsCustomer(): void
+    {
+        // Service 100 is on WHMCS server 2, which can hold another agency's key: its customer isn't this one's.
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
+        $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+        $this->assertSame(1, $this->row(101)['server_id'] ?? null);
+        $this->assertSame(self::CUSTOMER, $this->row(101)['customer_id'] ?? null);
+    }
+
+    public function testAnEmailAlreadyUsedOnAnotherServerSaysSo(): void
+    {
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
+        $this->transport->expect('POST', '/external/customer', 409, self::USER_EXISTS);
+
+        $this->assertSame(
+            "The email ada@example.com already has a CookiePal account through this client's service #100, which "
+            . "is on another CookiePal server (WHMCS server #2). Put the client's CookiePal products on the same "
+            . 'server, or contact CookiePal support (support@cookiepal.io).',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertNull($this->row(101));
+    }
+
     public function testALongTerminatedServiceOfTheClientDoesNotCount(): void
     {
         $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', '2020-01-01 09:00:00');
@@ -257,6 +283,22 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
     }
 
+    public function testAnInactiveWebsiteThatIsNotScheduledForDeletionIsReused(): void
+    {
+        // Inactive isn't always being removed: such a website stays on the customer until something deletes it.
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com');
+        $this->transport
+            ->expect('POST', '/external/domain', 409, self::DOMAIN_EXISTS)
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('first.com'),
+                $this->domainItem('example.com', ['status' => 'inactive']),
+            ]))
+            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
+    }
+
     public function testADomainWithoutAStatusIsActive(): void
     {
         $this->seedService(100, 7, self::CUSTOMER, 'first.com');
@@ -276,7 +318,7 @@ final class CreateAccountTest extends ModuleTestCase
     {
         return [
             'scheduled for deletion' => [['scheduledDeletion' => '2026-11-26T10:00:00.000Z']],
-            'inactive' => [['status' => 'inactive']],
+            'inactive and scheduled' => [['status' => 'inactive', 'scheduledDeletion' => '2026-11-26T10:00:00.000Z']],
         ];
     }
 
@@ -520,6 +562,21 @@ final class CreateAccountTest extends ModuleTestCase
 
         $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
         $this->assertNull($this->row(101));
+    }
+
+    public function testAnEmailOnACustomerWhoseWebsitesAreAllInactiveSaysToWait(): void
+    {
+        // Deleting a customer makes its websites inactive without scheduling them.
+        $terminatedAt = ServiceStore::now(-3600);
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', $terminatedAt);
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('first.com', ['status' => 'inactive']),
+                $this->domainItem('shop.example.org', ['status' => 'inactive']),
+            ]));
+
+        $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
     }
 
     public function testAnEmailOnACustomerAlreadyGoneSaysToWait(): void

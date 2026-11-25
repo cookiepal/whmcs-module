@@ -15,6 +15,7 @@ final class ServiceRecord
 {
     public function __construct(
         public readonly int $serviceId,
+        public readonly int $serverId,
         public readonly int $clientId,
         public readonly string $customerId,
         public readonly string $domainId,
@@ -28,6 +29,7 @@ final class ServiceRecord
 
         return new self(
             (int) $row->service_id,
+            (int) ($row->server_id ?? 0),
             (int) $row->client_id,
             (string) $row->customer_id,
             (string) $row->domain_id,

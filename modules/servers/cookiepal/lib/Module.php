@@ -59,8 +59,9 @@ final class Module
             // Run again after a lost answer, either create answers 200 with its first body: saved like a 201.
             $key = IdempotencyKey::forCreate($serviceId, $existing);
 
-            // A second order from the same client adds a website to the same CookiePal customer.
-            $live = $clientId > 0 ? $store->findLiveForClient($clientId, $serviceId) : null;
+            // A second order from the same client, on the same CookiePal server, adds a website to its customer.
+            $serverId = self::intParam($params, 'serverid');
+            $live = $clientId > 0 ? $store->findLiveForClient($clientId, $serverId, $serviceId) : null;
             if ($live !== null) {
                 $domainId = self::addDomainToCustomer(
                     $api,
@@ -73,15 +74,24 @@ final class Module
                     $key
                 );
                 if ($domainId !== null) {
-                    self::saveCreated($store, $serviceId, $clientId, $live->customerId, $domainId);
+                    self::saveCreated($store, $serviceId, $serverId, $clientId, $live->customerId, $domainId);
 
                     return 'success';
                 }
                 // That customer is gone from CookiePal: start a new one below.
             }
 
-            [$customerId, $domainId] = self::createCustomer($api, $store, $params, $clientId, $domain, $plan, $key);
-            self::saveCreated($store, $serviceId, $clientId, $customerId, $domainId);
+            [$customerId, $domainId] = self::createCustomer(
+                $api,
+                $store,
+                $params,
+                $serverId,
+                $clientId,
+                $domain,
+                $plan,
+                $key
+            );
+            self::saveCreated($store, $serviceId, $serverId, $clientId, $customerId, $domainId);
 
             return 'success';
         });
@@ -159,9 +169,10 @@ final class Module
             }
 
             $own = self::findDomain($customer, $record->domainId);
+            // Other websites that keep the customer: active ones, not inactive or scheduled ones.
             $otherActive = array_filter(
                 self::domainsOf($customer),
-                fn (array $d): bool => $d !== $own && !self::isBeingRemoved($d)
+                fn (array $d): bool => $d !== $own && self::isUsable($d)
             );
             $sharedWith = $store->findOtherLiveOnCustomer($record->customerId, $serviceId);
 
@@ -171,6 +182,18 @@ final class Module
                 try {
                     self::ignoreNotFound(fn () => $api->deleteDomain($record->customerId, $record->domainId));
                 } catch (ApiException $e) {
+                    if (!self::isUsable($own) && $e->is(400)) {
+                        // An inactive website: the API's "only active domain" check can still refuse it when exactly
+                        // one other website is active. The service ends anyway; the website was already inactive.
+                        Logger::activity(
+                            'service #' . $serviceId . ' is terminated, but CookiePal didn\'t delete its inactive '
+                            . 'website ' . $record->domainId . ' on customer ' . $record->customerId . ': '
+                            . $e->adminMessage()
+                        );
+                        $store->markTerminated($serviceId);
+
+                        return 'success';
+                    }
                     if ($sharedWith === null || !$e->is(400, 'ONLY_ACTIVE_DOMAIN')) {
                         throw $e;
                     }
@@ -302,7 +325,8 @@ final class Module
             if (!$e instanceof ApiException) {
                 Logger::unexpected('ClientArea', $params, $e);
             }
-            $view['state'] = 'error';
+            // A 404: the customer is gone from CookiePal, which waiting won't change.
+            $view['state'] = $e instanceof ApiException && $e->is(404) ? 'missing' : 'error';
         }
 
         return [
@@ -577,6 +601,7 @@ final class Module
         ApiClient $api,
         ServiceStore $store,
         array $params,
+        int $serverId,
         int $clientId,
         string $domain,
         string $plan,
@@ -606,6 +631,16 @@ final class Module
             // CookiePal deletes a terminated customer a day later; until then it holds the domain and the email.
             if ($elsewhere) {
                 throw new ModuleException(self::elsewhereMessage($store, $clientId, $domain));
+            }
+            $elsewhereLive = $clientId > 0 ? $store->findLiveForClientOnOtherServer($clientId, $serverId) : null;
+            if ($elsewhereLive !== null) {
+                // The client's CookiePal user belongs to another server's agency key; this one can't reuse it.
+                throw new ModuleException(
+                    'The email ' . $email . ' already has a CookiePal account through this client\'s service #'
+                    . $elsewhereLive->serviceId . ', which is on another CookiePal server (WHMCS server #'
+                    . $elsewhereLive->serverId . '). Put the client\'s CookiePal products on the same server, or '
+                    . 'contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
+                );
             }
             $recent = self::recentlyTerminated($store, $clientId, null);
             if ($recent !== null && self::isCustomerBeingRemoved($api, $recent->customerId)) {
@@ -658,8 +693,8 @@ final class Module
     }
 
     /**
-     * True when the customer is gone, or every website on it is being removed. A failed read counts as
-     * being removed, which keeps the message that was shown before this check.
+     * True when the customer is gone, or has no website that keeps it: deleting a customer makes all its
+     * websites inactive. A failed read counts as being removed, which keeps the message shown before this check.
      */
     private static function isCustomerBeingRemoved(ApiClient $api, string $customerId): bool
     {
@@ -669,7 +704,7 @@ final class Module
             return true;
         }
         foreach (self::domainsOf($customer) as $domain) {
-            if (!self::isBeingRemoved($domain)) {
+            if (self::isUsable($domain)) {
                 return false;
             }
         }
@@ -681,12 +716,13 @@ final class Module
     private static function saveCreated(
         ServiceStore $store,
         int $serviceId,
+        int $serverId,
         int $clientId,
         string $customerId,
         string $domainId
     ): void {
         try {
-            $store->save($serviceId, $clientId, $customerId, $domainId);
+            $store->save($serviceId, $serverId, $clientId, $customerId, $domainId);
         } catch (\Throwable $e) {
             Logger::activity(
                 'service #' . $serviceId . ' got CookiePal customer ' . $customerId . ' and website ' . $domainId
@@ -773,15 +809,27 @@ final class Module
     }
 
     /**
-     * Scheduled for deletion, or not active. A domain without `status` is active.
+     * Scheduled for deletion. Not every inactive website is: CookiePal deactivates websites for other
+     * reasons too, and such a website stays until something deletes it.
      *
      * @param array<mixed> $domain
      */
     private static function isBeingRemoved(array $domain): bool
     {
+        return self::websiteFacts($domain)['scheduledDeletion'] !== null;
+    }
+
+    /**
+     * Active and not scheduled for deletion: a website that keeps its customer. A domain without `status`
+     * is active.
+     *
+     * @param array<mixed> $domain
+     */
+    private static function isUsable(array $domain): bool
+    {
         $facts = self::websiteFacts($domain);
 
-        return !$facts['active'] || $facts['scheduledDeletion'] !== null;
+        return $facts['active'] && $facts['scheduledDeletion'] === null;
     }
 
     /**

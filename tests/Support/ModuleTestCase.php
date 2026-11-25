@@ -55,6 +55,7 @@ abstract class ModuleTestCase extends TestCase
         return array_replace_recursive([
             'serviceid' => 101,
             'userid' => 7,
+            'serverid' => 1,
             'pid' => 3,
             'domain' => 'https://www.Example.com/shop?x=1',
             'serverhostname' => self::HOST,
@@ -79,11 +80,13 @@ abstract class ModuleTestCase extends TestCase
         string $customerId = self::CUSTOMER,
         string $domainId = 'example.com',
         ?string $terminatedAt = null,
-        string $createdAt = '2026-11-20 10:00:00'
+        string $createdAt = '2026-11-20 10:00:00',
+        int $serverId = 1
     ): void {
         (new ServiceStore())->find(0);
         FakeDatabase::seed(ServiceStore::TABLE, [
             'service_id' => $serviceId,
+            'server_id' => $serverId,
             'client_id' => $clientId,
             'customer_id' => $customerId,
             'domain_id' => $domainId,

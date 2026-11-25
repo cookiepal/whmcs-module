@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CookiePal\Tests\Module;
 
+use CookiePal\Tests\Support\ModuleLog;
 use CookiePal\Tests\Support\ModuleTestCase;
 use WHMCS\Module\Server\CookiePal\ServiceStore;
 
@@ -102,6 +103,65 @@ final class TerminateAccountTest extends ModuleTestCase
             cookiepal_TerminateAccount($this->params())
         );
         $this->assertNull($this->terminatedAt());
+    }
+
+    public function testAnInactiveWebsiteIsDeletedAndInactiveOnesDoNotKeepTheCustomer(): void
+    {
+        $this->seedService();
+        $this->seedService(102, 7, self::CUSTOMER, 'second.com');
+        $this->transport
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('example.com', ['status' => 'inactive']),
+                $this->domainItem('second.com'),
+            ]))
+            ->expect('DELETE', $this->deleteDomainPath(), 204);
+
+        $this->assertSame('success', cookiepal_TerminateAccount($this->params()));
+        $this->assertNotNull($this->terminatedAt());
+    }
+
+    public function testTheLastServiceWithOnlyInactiveWebsitesLeftDeletesTheCustomer(): void
+    {
+        $this->seedService();
+        $this->transport
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('example.com'),
+                $this->domainItem('old.com', ['status' => 'inactive']),
+            ]))
+            ->expect('DELETE', $this->deleteCustomerPath(), 204);
+
+        $this->assertSame('success', cookiepal_TerminateAccount($this->params()));
+    }
+
+    public function testAnInactiveWebsiteTheApiRefusesToDeleteStillEndsTheService(): void
+    {
+        // Today's API counts active websites even when the one deleted is inactive, and refuses with
+        // exactly one other active. The website is already inactive, so the service ends; the log says so.
+        $this->seedService();
+        $this->seedService(102, 7, self::CUSTOMER, 'second.com');
+        $this->transport
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('example.com', ['status' => 'inactive']),
+                $this->domainItem('second.com'),
+            ]))
+            ->expect(
+                'DELETE',
+                $this->deleteDomainPath(),
+                400,
+                ['message' => "Cannot delete the customer's only active domain"]
+            );
+
+        $this->assertSame('success', cookiepal_TerminateAccount($this->params()));
+        $this->assertNotNull($this->terminatedAt());
+        $this->assertNull($this->terminatedAt(102));
+        $this->assertSame(
+            [
+                "CookiePal: service #101 is terminated, but CookiePal didn't delete its inactive website example.com "
+                . 'on customer ' . self::CUSTOMER . ': CookiePal API error (400): Cannot delete the customer\'s only '
+                . 'active domain',
+            ],
+            ModuleLog::$activity
+        );
     }
 
     public function testAWebsiteAlreadyBeingRemovedIsNotDeletedAgainAndTheSharedCustomerStays(): void

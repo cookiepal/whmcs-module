@@ -26,7 +26,7 @@ final class ServiceStoreTest extends TestCase
         $this->store->find(0);
         FakeDatabase::seed(
             ServiceStore::TABLE,
-            $row + ['created_at' => '2026-11-20 10:00:00', 'terminated_at' => null]
+            $row + ['server_id' => 1, 'created_at' => '2026-11-20 10:00:00', 'terminated_at' => null]
         );
     }
 
@@ -44,6 +44,7 @@ final class ServiceStoreTest extends TestCase
         }
         $this->assertSame([
             'service_id' => ['unsignedInteger', [], ['primary']],
+            'server_id' => ['unsignedInteger', [], []],
             'client_id' => ['unsignedInteger', [], ['index']],
             'customer_id' => ['string', [64], ['index']],
             'domain_id' => ['string', [255], []],
@@ -72,12 +73,17 @@ final class ServiceStoreTest extends TestCase
     public function testSavesFindsAndTerminatesInUtc(): void
     {
         $before = gmdate(ServiceStore::TIME_FORMAT);
-        $this->store->save(1, 7, 'c1', 'a.com');
+        $this->store->save(1, 3, 7, 'c1', 'a.com');
 
         $record = $this->store->find(1);
         $this->assertNotNull($record);
-        $this->assertSame([1, 7, 'c1', 'a.com', false], [
-            $record->serviceId, $record->clientId, $record->customerId, $record->domainId, $record->isTerminated(),
+        $this->assertSame([1, 3, 7, 'c1', 'a.com', false], [
+            $record->serviceId,
+            $record->serverId,
+            $record->clientId,
+            $record->customerId,
+            $record->domainId,
+            $record->isTerminated(),
         ]);
 
         $this->store->markTerminated(1);
@@ -88,7 +94,7 @@ final class ServiceStoreTest extends TestCase
         $this->assertGreaterThanOrEqual($before, $terminatedAt);
         $this->assertLessThanOrEqual(gmdate(ServiceStore::TIME_FORMAT), $terminatedAt);
 
-        $this->store->save(1, 7, 'c2', 'a.com');
+        $this->store->save(1, 3, 7, 'c2', 'a.com');
         $saved = $this->store->find(1);
         $this->assertNotNull($saved);
         $this->assertFalse($saved->isTerminated());
@@ -130,9 +136,27 @@ final class ServiceStoreTest extends TestCase
             ]
         );
 
-        $this->assertSame('new', $this->store->findLiveForClient(7, 99)?->customerId);
-        $this->assertSame('old', $this->store->findLiveForClient(7, 2)?->customerId);
-        $this->assertNull($this->store->findLiveForClient(9, 99));
+        $this->assertSame('new', $this->store->findLiveForClient(7, 1, 99)?->customerId);
+        $this->assertSame('old', $this->store->findLiveForClient(7, 1, 2)?->customerId);
+        $this->assertNull($this->store->findLiveForClient(9, 1, 99));
+    }
+
+    public function testTheClientsLiveServiceIsOnlyLookedForOnTheSameServer(): void
+    {
+        $this->seed([
+            'service_id' => 1, 'server_id' => 1, 'client_id' => 7, 'customer_id' => 'a', 'domain_id' => 'a.com',
+        ]);
+        $this->seed([
+            'service_id' => 2, 'server_id' => 2, 'client_id' => 7, 'customer_id' => 'b', 'domain_id' => 'b.com',
+            'created_at' => '2026-12-01 00:00:00',
+        ]);
+
+        $this->assertSame('a', $this->store->findLiveForClient(7, 1, 99)?->customerId);
+        $this->assertSame('b', $this->store->findLiveForClient(7, 2, 99)?->customerId);
+        $this->assertNull($this->store->findLiveForClient(7, 3, 99));
+        $this->assertSame(2, $this->store->findLiveForClientOnOtherServer(7, 1)?->serviceId);
+        $this->assertSame(1, $this->store->findLiveForClientOnOtherServer(7, 2)?->serviceId);
+        $this->assertNull($this->store->findLiveForClientOnOtherServer(8, 1));
     }
 
     public function testOtherLiveServicesOnACustomerOrWebsite(): void
