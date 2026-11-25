@@ -25,6 +25,23 @@ final class EntryPointsTest extends ModuleTestCase
         ], cookiepal_MetaData());
     }
 
+    public function testCookiepalPhpRequiresEveryLibFile(): void
+    {
+        // WHMCS has no autoloader for the module; only the tests do, so a missing require_once would pass here.
+        $entry = (string) file_get_contents(self::MODULE_DIR . 'cookiepal.php');
+        $files = glob(self::MODULE_DIR . 'lib/*.php');
+        $this->assertNotFalse($files);
+        $this->assertNotSame([], $files);
+
+        foreach ($files as $file) {
+            $this->assertStringContainsString(
+                "require_once __DIR__ . '/lib/" . basename($file) . "';",
+                $entry,
+                basename($file) . ' is not required by cookiepal.php'
+            );
+        }
+    }
+
     public function testThePlanOptionIsADropdownOfTheFourPlans(): void
     {
         $options = cookiepal_ConfigOptions();

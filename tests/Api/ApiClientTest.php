@@ -362,6 +362,25 @@ final class ApiClientTest extends TestCase
         $this->assertStringContainsString('2026-11-26T10:01:00.000Z', ModuleLog::asShown($call));
     }
 
+    public function testTheSignInLinkIsMaskedWhenCookiePalEscapesItsSlashes(): void
+    {
+        $this->transport->expect(
+            'POST',
+            $this->customerPath() . '/sso',
+            200,
+            '{"url":"https:\\/\\/app.cookiepal.io\\/sso\\/start","expiresAt":"2026-11-26T10:01:00.000Z"}'
+        );
+
+        $this->assertSame(
+            'https://app.cookiepal.io/sso/start',
+            $this->client()->createSsoLink(self::CUSTOMER, 'example.com')['url']
+        );
+
+        $shown = ModuleLog::asShown(ModuleLog::$calls[0]);
+        $this->assertStringNotContainsString('app.cookiepal.io', $shown);
+        $this->assertStringContainsString('2026-11-26T10:01:00.000Z', $shown);
+    }
+
     public function testANetworkErrorIsLogged(): void
     {
         $this->transport->expectNetworkError('POST', '/external/scan');

@@ -31,12 +31,33 @@ final class ClientAreaTest extends ModuleTestCase
         return cookiepal_ClientArea($this->params())['templateVariables']['cookiepal'];
     }
 
+    private static function compileDir(): string
+    {
+        return sys_get_temp_dir() . '/cookiepal-smarty-' . getmypid();
+    }
+
+    public static function tearDownAfterClass(): void
+    {
+        $dir = self::compileDir();
+        if (is_dir($dir)) {
+            $files = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($files as $file) {
+                $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname());
+            }
+            rmdir($dir);
+        }
+        parent::tearDownAfterClass();
+    }
+
     /** @param array{tabOverviewModuleOutputTemplate: string, templateVariables: array<string, mixed>} $output */
     private function render(array $output): string
     {
         $smarty = new \Smarty();
         $smarty->setTemplateDir(__DIR__ . '/../../modules/servers/cookiepal');
-        $smarty->setCompileDir(sys_get_temp_dir() . '/cookiepal-smarty-' . getmypid());
+        $smarty->setCompileDir(self::compileDir());
         $smarty->assign('WEB_ROOT', 'https://billing.example.net');
         $smarty->assign($output['templateVariables']);
 
@@ -182,5 +203,43 @@ final class ClientAreaTest extends ModuleTestCase
         $this->assertStringContainsString('This CookiePal service has ended.', $terminated);
         $this->assertStringContainsString('Your CookiePal banner is being set up.', $pending);
         $this->assertStringNotContainsString('dosinglesignon', $terminated . $pending);
+    }
+
+    public function testTheTemplateRendersAWebsiteNoLongerThere(): void
+    {
+        $this->seedService();
+        $this->transport->expect('GET', $this->customerPath(), 200, $this->customerBody([
+            $this->domainItem('other.com'),
+        ]));
+
+        $html = $this->render(cookiepal_ClientArea($this->params()));
+
+        $this->assertStringContainsString('This website is no longer on CookiePal.', $html);
+        $this->assertStringNotContainsString('dosinglesignon', $html);
+    }
+
+    public function testTheTemplateRendersTheErrorState(): void
+    {
+        $this->seedService();
+        $this->transport->expect('GET', $this->customerPath(), 503, ['message' => 'Service Unavailable']);
+
+        $html = $this->render(cookiepal_ClientArea($this->params()));
+
+        $this->assertStringContainsString("We couldn&#039;t load your CookiePal details right now.", $html);
+        $this->assertStringNotContainsString('dosinglesignon', $html);
+    }
+
+    public function testTheTemplateShowsAnInstalledBanner(): void
+    {
+        $this->seedService();
+        $this->transport->expect('GET', $this->customerPath(), 200, $this->customerBody([
+            $this->domainItem('example.com', ['verification' => 'verified']),
+        ]));
+
+        $html = $this->render(cookiepal_ClientArea($this->params()));
+
+        $this->assertStringContainsString('<span class="badge badge-success">Yes</span>', $html);
+        $this->assertStringNotContainsString('badge-secondary', $html);
+        $this->assertStringNotContainsString('This service is suspended', $html);
     }
 }

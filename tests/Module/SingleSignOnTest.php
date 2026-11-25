@@ -6,6 +6,7 @@ namespace CookiePal\Tests\Module;
 
 use CookiePal\Tests\Support\ModuleLog;
 use CookiePal\Tests\Support\ModuleTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use WHMCS\Module\Server\CookiePal\Module;
 use WHMCS\Module\Server\CookiePal\Transport;
@@ -61,7 +62,7 @@ final class SingleSignOnTest extends ModuleTestCase
     }
 
     /** @param array<string, string> $body */
-    #[\PHPUnit\Framework\Attributes\DataProvider('failures')]
+    #[DataProvider('failures')]
     public function testTheClientSeesOnlyAGenericSentence(int $status, array $body): void
     {
         $this->ssoAnswers($status, $body);
