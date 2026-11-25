@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.2', '8.3', '8.4']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, intl
+          coverage: none
+          tools: composer:v2
+
+      - name: Find Composer's cache
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ matrix.php }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ matrix.php }}-
+
+      - name: Lint
+        run: find modules tests -name '*.php' -print0 | xargs -0 -n1 php -l
+
+      - name: Install
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: PHPUnit
+        run: vendor/bin/phpunit
+
+  zip:
+    name: Build the zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build
+        run: scripts/build-zip.sh
+
+      - name: Check it holds the module only
+        run: |
+          files="$(unzip -Z1 dist/cookiepal-whmcs-*.zip)"
+          if grep -v '^modules/servers/cookiepal/' <<< "$files"; then
+            echo "The zip holds files outside modules/servers/cookiepal" >&2
+            exit 1
+          fi
+          grep -qx 'modules/servers/cookiepal/cookiepal.php' <<< "$files"
+          grep -qx 'modules/servers/cookiepal/LICENSE' <<< "$files"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cookiepal-whmcs-zip
+          path: dist/cookiepal-whmcs-*.zip
+          if-no-files-found: error
