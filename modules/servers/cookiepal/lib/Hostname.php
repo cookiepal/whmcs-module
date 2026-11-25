@@ -75,7 +75,7 @@ final class Hostname
     /** @throws ModuleException for a non-ASCII domain when the intl extension is missing */
     private static function toAscii(string $host): string
     {
-        if (preg_match('/[^\x20-\x7e]/', $host) !== 1) {
+        if (preg_match('/[\x80-\xff]/', $host) !== 1) {
             return strtolower($host);
         }
         if (!function_exists('idn_to_ascii')) {

@@ -61,6 +61,9 @@ final class HostnameTest extends TestCase
             'an IP address' => ['192.168.0.1'],
             'an underscore' => ['my_site.example.com'],
             'a label starting with a hyphen' => ['-example.com'],
+            // ASCII control characters aren't international: no intl needed to refuse them.
+            'a tab' => ["exa\tmple.com"],
+            'an inner newline' => ["exa\nmple.com"],
         ];
     }
 
