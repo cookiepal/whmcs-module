@@ -1,0 +1,30 @@
+{
+    "name": "cookiepal/whmcs-module",
+    "description": "CookiePal provisioning module for WHMCS",
+    "type": "project",
+    "license": "MIT",
+    "keywords": ["whmcs", "provisioning module", "server module", "cookie consent", "cookiepal"],
+    "homepage": "https://github.com/cookiepal/whmcs-module",
+    "support": {
+        "email": "support@cookiepal.io"
+    },
+    "require": {
+        "php": ">=8.2 <8.5"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.5",
+        "smarty/smarty": "^4.5"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "WHMCS\\Module\\Server\\CookiePal\\": "modules/servers/cookiepal/lib/",
+            "CookiePal\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "sort-packages": true
+    }
+}
