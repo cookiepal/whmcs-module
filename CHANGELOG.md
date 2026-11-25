@@ -8,7 +8,8 @@ heading gets its release date when it is tagged.
 The first release.
 
 - Create, suspend, unsuspend, change package and terminate CookiePal websites through the CookiePal agency API.
-- One CookiePal customer per WHMCS client: the client's later services add websites to it. Terminate never removes a
+- One CookiePal customer per WHMCS client and CookiePal server: the client's later services on that server add websites
+  to it. Terminate never removes a
   customer that another live service still uses.
 - Running Create again on a service that already has its website succeeds without a call, and never creates a second
   website. Create sends an idempotency key, built from the WHMCS System URL and the service ID, so running it again
