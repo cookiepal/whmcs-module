@@ -51,6 +51,24 @@ final class LangTest extends ModuleTestCase
         $this->assertSame('Copier', $this->copyLabel([]));
     }
 
+    public function testATranslationThatDoesNotLoadIsEnglish(): void
+    {
+        $dir = sys_get_temp_dir() . '/cookiepal-lang-' . getmypid();
+        @mkdir($dir);
+        copy(self::FIXTURES . '/english.php', $dir . '/english.php');
+        file_put_contents($dir . '/broken.php', "<?php\n\$_LANG['copy'] = 'Kopieren'\n\$_LANG['copied'] = ;\n");
+
+        try {
+            $strings = Lang::forParams(['clientsdetails' => ['language' => 'broken']], $dir);
+        } finally {
+            unlink($dir . '/broken.php');
+            unlink($dir . '/english.php');
+            rmdir($dir);
+        }
+
+        $this->assertSame(['copy' => 'Copy', 'copied' => 'Copied'], $strings);
+    }
+
     public function testTheModulesEnglishHasEveryStringTheTemplateUses(): void
     {
         $template = (string) file_get_contents(__DIR__ . '/../../modules/servers/cookiepal/templates/clientarea.tpl');

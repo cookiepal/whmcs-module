@@ -9,7 +9,8 @@ if (!defined('WHMCS')) {
 }
 
 /**
- * The strings the client sees: lang/english.php, overlaid with the client's language file when one exists.
+ * The strings the client sees: lang/english.php, overlaid with the client's language file when one exists
+ * and loads.
  */
 final class Lang
 {
@@ -25,7 +26,11 @@ final class Lang
         $strings = self::load($directory . '/english.php');
         $language = self::language($params);
         if ($language !== 'english' && is_file($directory . '/' . $language . '.php')) {
-            $strings = array_merge($strings, self::load($directory . '/' . $language . '.php'));
+            try {
+                $strings = array_merge($strings, self::load($directory . '/' . $language . '.php'));
+            } catch (\Throwable) {
+                // A host's translation with a syntax error mustn't break the page: English it is.
+            }
         }
 
         return $strings;
