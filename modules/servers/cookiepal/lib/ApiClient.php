@@ -98,31 +98,52 @@ final class ApiClient
     }
 
     /**
-     * POST /external/customer: 201 `{ customerId, customerName, customerEmail, domain: { domainId, handler, plan } }`
+     * POST /external/customer: 201 `{ customerId, customerName, customerEmail, domain: { domainId, handler, plan } }`,
+     * or 200 with the same body when CookiePal replays an earlier call that had the same idempotency key.
      *
      * @return array<mixed>
      */
-    public function createCustomer(string $customerName, string $customerEmail, string $domainId, string $plan): array
-    {
-        return $this->request('POST', '/external/customer', [
+    public function createCustomer(
+        string $customerName,
+        string $customerEmail,
+        string $domainId,
+        string $plan,
+        ?string $idempotencyKey = null
+    ): array {
+        return $this->request('POST', '/external/customer', self::withKey([
             'customerName' => $customerName,
             'customerEmail' => $customerEmail,
             'domainId' => $domainId,
             'plan' => $plan,
-        ]);
+        ], $idempotencyKey));
     }
 
     /**
-     * POST /external/domain: 201 `{ customerId, domain: { domainId, handler, plan } }`
+     * POST /external/domain: 201 `{ customerId, domain: { domainId, handler, plan } }`, or 200 with the same body
+     * when CookiePal replays an earlier call that had the same idempotency key.
      *
      * @return array<mixed>
      */
-    public function addDomain(string $customerId, string $domainId, string $plan): array
+    public function addDomain(string $customerId, string $domainId, string $plan, ?string $idempotencyKey = null): array
     {
-        return $this->request('POST', '/external/domain', [
+        return $this->request('POST', '/external/domain', self::withKey([
             'customerId' => $customerId,
             'domain' => ['domainId' => $domainId, 'plan' => $plan],
-        ]);
+        ], $idempotencyKey));
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     *
+     * @return array<string, mixed>
+     */
+    private static function withKey(array $body, ?string $idempotencyKey): array
+    {
+        if ($idempotencyKey !== null) {
+            $body['idempotencyKey'] = $idempotencyKey;
+        }
+
+        return $body;
     }
 
     /**

@@ -56,6 +56,8 @@ final class Module
             $domain = Hostname::website(self::stringParam($params, 'domain'));
             $plan = Plan::fromParams($params);
             $api = self::api($params, 'CreateAccount');
+            // Run again after a lost answer, either create answers 200 with its first body: saved like a 201.
+            $key = IdempotencyKey::forCreate($serviceId, $existing);
 
             // A second order from the same client adds a website to the same CookiePal customer.
             $live = $clientId > 0 ? $store->findLiveForClient($clientId, $serviceId) : null;
@@ -67,7 +69,8 @@ final class Module
                     $domain,
                     $plan,
                     $serviceId,
-                    $clientId
+                    $clientId,
+                    $key
                 );
                 if ($domainId !== null) {
                     self::saveCreated($store, $serviceId, $clientId, $live->customerId, $domainId);
@@ -77,7 +80,7 @@ final class Module
                 // That customer is gone from CookiePal: start a new one below.
             }
 
-            [$customerId, $domainId] = self::createCustomer($api, $store, $params, $clientId, $domain, $plan);
+            [$customerId, $domainId] = self::createCustomer($api, $store, $params, $clientId, $domain, $plan, $key);
             self::saveCreated($store, $serviceId, $clientId, $customerId, $domainId);
 
             return 'success';
@@ -504,10 +507,11 @@ final class Module
         string $domain,
         string $plan,
         int $serviceId,
-        int $clientId
+        int $clientId,
+        ?string $idempotencyKey
     ): ?string {
         try {
-            return self::domainIdFrom($api->addDomain($customerId, $domain, $plan));
+            return self::domainIdFrom($api->addDomain($customerId, $domain, $plan, $idempotencyKey));
         } catch (ApiException $e) {
             if ($e->is(409, 'DOMAIN_EXISTS')) {
                 return self::confirmExistingDomain($api, $store, $customerId, $domain, $plan, $serviceId, $e);
@@ -562,7 +566,8 @@ final class Module
     /**
      * POST /external/customer for a client with no live CookiePal service. A 409 is never taken as
      * "this agency already has it": the API answers the same for a domain on any other customer,
-     * and that customer must not end up on this service.
+     * and that customer must not end up on this service. A lost answer is recovered by the API instead:
+     * the same idempotency key gets the first answer back as a 200.
      *
      * @param array<string, mixed> $params
      *
@@ -574,7 +579,8 @@ final class Module
         array $params,
         int $clientId,
         string $domain,
-        string $plan
+        string $plan,
+        ?string $idempotencyKey
     ): array {
         $client = is_array($params['clientsdetails'] ?? null) ? $params['clientsdetails'] : [];
         $email = trim(self::stringParam($client, 'email'));
@@ -591,7 +597,7 @@ final class Module
         }
 
         try {
-            $result = $api->createCustomer($name, $email, $domain, $plan);
+            $result = $api->createCustomer($name, $email, $domain, $plan, $idempotencyKey);
         } catch (ApiException $e) {
             $elsewhere = $e->is(409, 'DOMAIN_REGISTERED_ELSEWHERE');
             if (!$elsewhere && !$e->is(409, 'USER_EXISTS')) {

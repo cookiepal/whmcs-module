@@ -26,6 +26,7 @@ require_once __DIR__ . '/lib/Logger.php';
 require_once __DIR__ . '/lib/ApiClient.php';
 require_once __DIR__ . '/lib/ServiceRecord.php';
 require_once __DIR__ . '/lib/ServiceStore.php';
+require_once __DIR__ . '/lib/IdempotencyKey.php';
 require_once __DIR__ . '/lib/Plan.php';
 require_once __DIR__ . '/lib/Snippet.php';
 require_once __DIR__ . '/lib/Lang.php';

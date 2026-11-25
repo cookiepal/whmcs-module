@@ -8,12 +8,15 @@ use CookiePal\Tests\Support\FakeDatabase;
 use CookiePal\Tests\Support\ModuleLog;
 use CookiePal\Tests\Support\ModuleTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use WHMCS\Config\Setting;
 use WHMCS\Module\Server\CookiePal\Module;
 use WHMCS\Module\Server\CookiePal\ServiceStore;
 use WHMCS\Module\Server\CookiePal\Transport;
 
 final class CreateAccountTest extends ModuleTestCase
 {
+    /** whmcs-, sha256('billing.example.net') to 16 hex, the service ID. */
+    private const KEY = 'whmcs-9671d0febcefbe9b-101';
     private const ELSEWHERE = [
         'message' => 'Domain is already registered to another account',
         'code' => 'DOMAIN_REGISTERED_ELSEWHERE',
@@ -38,6 +41,7 @@ final class CreateAccountTest extends ModuleTestCase
             'customerEmail' => 'ada@example.com',
             'domainId' => 'example.com',
             'plan' => 'growth',
+            'idempotencyKey' => self::KEY,
         ], $this->transport->requests[0]['json']);
         $row = $this->row();
         $this->assertNotNull($row);
@@ -83,7 +87,11 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame('success', cookiepal_CreateAccount($this->params()));
 
         $this->assertSame(
-            ['customerId' => self::CUSTOMER, 'domain' => ['domainId' => 'example.com', 'plan' => 'growth']],
+            [
+                'customerId' => self::CUSTOMER,
+                'domain' => ['domainId' => 'example.com', 'plan' => 'growth'],
+                'idempotencyKey' => self::KEY,
+            ],
             $this->transport->requests[0]['json']
         );
         $this->assertSame(self::CUSTOMER, $this->row(101)['customer_id'] ?? null);
@@ -96,6 +104,70 @@ final class CreateAccountTest extends ModuleTestCase
         $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
 
         $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+    }
+
+    public function testARetryAfterALostAnswerSendsTheSameKeyAndTheReplayCompletesIt(): void
+    {
+        $this->transport
+            ->expectNetworkError('POST', '/external/customer')
+            ->expect('POST', '/external/customer', 200, $this->createdCustomerBody());
+
+        $this->assertSame(
+            "Couldn't reach CookiePal (curl error 28): Operation timed out",
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertNull($this->row());
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+
+        $this->assertSame(
+            [self::KEY, self::KEY],
+            array_map(fn (array $r): mixed => $r['json']['idempotencyKey'] ?? null, $this->transport->requests)
+        );
+        $this->assertSame(self::CUSTOMER, $this->row()['customer_id'] ?? null);
+        $this->assertSame('example.com', $this->row()['domain_id'] ?? null);
+        $this->assertNull($this->terminatedAt());
+    }
+
+    public function testAReplayedWebsiteIsSavedLikeANewOneAndNothingIsSentAgain(): void
+    {
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com');
+        $this->transport->expect('POST', '/external/domain', 200, $this->addedDomainBody('example.com'));
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+
+        $this->assertSame(['POST /external/domain'], $this->transport->sent());
+        $this->assertSame(self::KEY, $this->transport->requests[0]['json']['idempotencyKey'] ?? null);
+        $this->assertSame(self::CUSTOMER, $this->row(101)['customer_id'] ?? null);
+        $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
+    }
+
+    public function testTheKeyIsInTheModuleLogUnmasked(): void
+    {
+        $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
+
+        cookiepal_CreateAccount($this->params());
+
+        $call = ModuleLog::$calls[0];
+        $this->assertSame([self::API_KEY], $call['replaceVars']);
+        $this->assertStringContainsString('"idempotencyKey":"' . self::KEY . '"', ModuleLog::asShown($call));
+    }
+
+    public function testWithoutASystemUrlNoKeyIsSent(): void
+    {
+        Setting::$values = [];
+        $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertArrayNotHasKey('idempotencyKey', $this->transport->requests[0]['json']);
+    }
+
+    public function testCreatingAgainAfterTerminateSendsANewKey(): void
+    {
+        $this->seedService(101, 7, self::OTHER_CUSTOMER, 'example.com', '2026-11-20 09:30:00');
+        $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(self::KEY . '-20261120093000', $this->transport->requests[0]['json']['idempotencyKey']);
     }
 
     public function testARetryOnAServiceThatHasItsWebsiteSucceedsWithoutACall(): void

@@ -29,7 +29,8 @@ abstract class ModuleTestCase extends TestCase
         FakeDatabase::reset();
         ServiceStore::resetForTests();
         ModuleLog::reset();
-        Setting::$values = [];
+        // WHMCS always has a System URL; the idempotency key is built from it.
+        Setting::$values = ['SystemURL' => 'https://billing.example.net/'];
         unset($_SESSION['Language']);
         $this->transport = new FakeTransport();
         Module::useTransport($this->transport);
