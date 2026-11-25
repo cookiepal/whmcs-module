@@ -11,7 +11,8 @@ The first release.
 - One CookiePal customer per WHMCS client: the client's later services add websites to it. Terminate never removes a
   customer that another live service still uses.
 - Running Create again on a service that already has its website succeeds without a call, and never creates a second
-  website.
+  website. Create sends an idempotency key, built from the WHMCS System URL and the service ID, so running it again
+  after a lost answer completes the first request.
 - Clear messages when the domain is already on CookiePal or is still being removed from it, when the client's email
   already has its own CookiePal account, and when another service already has the website.
 - The client area shows the banner's install code, the plan, whether the banner is installed and any suspension, in the

@@ -53,7 +53,7 @@ To sell one product with a choice of plans instead, add a configurable option na
 
 | WHMCS action | What happens in CookiePal |
 |---|---|
-| **Create** | The client's first CookiePal service creates a CookiePal customer (named after the client's company, or their first and last name) with the service's domain on the product's plan. CookiePal emails the client an invitation to their dashboard. The client's next services add their domains to the same CookiePal customer. Running Create again on a service that already has its website does nothing and succeeds. A second service for a website another service already has is refused. |
+| **Create** | The client's first CookiePal service creates a CookiePal customer (named after the client's company, or their first and last name) with the service's domain on the product's plan. CookiePal emails the client an invitation to their dashboard. The client's next services add their domains to the same CookiePal customer. Running Create again on a service that already has its website does nothing and succeeds, and running it again after an answer was lost completes the first request (see Troubleshooting). A second service for a website another service already has is refused. |
 | **Suspend** | Switches the banner off on the website. Nothing else changes, so Unsuspend brings it back exactly as it was. |
 | **Unsuspend** | Switches the banner back on. |
 | **Upgrade / Downgrade** (Change Package) | Changes the website's plan to the new product's plan. |
@@ -111,7 +111,9 @@ Open **Configuration > System Logs > Module Log** and turn on debug logging, rep
 | CookiePal module error: … | Something failed inside WHMCS or the module. The Module Log has the details; send them to [support@cookiepal.io](mailto:support@cookiepal.io). |
 | CookiePal API error (…) | Read the Module Log entry, and contact [support@cookiepal.io](mailto:support@cookiepal.io) with the time and the service ID. |
 
-If Create fails with "Couldn't reach CookiePal", or with a CookiePal API error 502 or 504, CookiePal may still have created the website. Run Create once more: if it then answers that the domain or email is already registered, contact [support@cookiepal.io](mailto:support@cookiepal.io) with the service ID and the domain before trying anything else.
+If Create fails with "Couldn't reach CookiePal", or with a CookiePal API error 502 or 504, CookiePal may still have created the website. Run Create again: every Create sends a request key made from the service ID and your WHMCS System URL, so CookiePal recognises the second request, answers it with the website it already created, and creates nothing new. The key isn't secret, and you'll see it in the Module Log. Keep the System URL unchanged until the retry: with a new System URL, the retry counts as a new request.
+
+If the retry still answers that the email already has its own CookiePal account, or that the domain is registered to another account, the earlier request didn't create them: CookiePal support can tell you whose they are. Contact [support@cookiepal.io](mailto:support@cookiepal.io) with the service ID and the domain.
 
 Every WHMCS error message is also in the WHMCS Activity Log.
 
