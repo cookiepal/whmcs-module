@@ -165,7 +165,21 @@ final class Module
             if ($sharedWith === null && $otherActive === []) {
                 self::ignoreNotFound(fn () => $api->deleteCustomer($record->customerId));
             } elseif ($own !== null && !self::isBeingRemoved($own)) {
-                self::ignoreNotFound(fn () => $api->deleteDomain($record->customerId, $record->domainId));
+                try {
+                    self::ignoreNotFound(fn () => $api->deleteDomain($record->customerId, $record->domainId));
+                } catch (ApiException $e) {
+                    if ($sharedWith === null || !$e->is(400, 'ONLY_ACTIVE_DOMAIN')) {
+                        throw $e;
+                    }
+                    // The other service's website isn't active in CookiePal, so this is the customer's
+                    // only active one. Terminating that service first lets this one remove the customer.
+                    throw new ModuleException(
+                        'CookiePal won\'t remove ' . $record->domainId . ' because it\'s the customer\'s only '
+                        . 'active website, and service #' . $sharedWith->serviceId . ' still uses that customer. '
+                        . 'Terminate service #' . $sharedWith->serviceId . ' first, then run Terminate again, '
+                        . 'or contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
+                    );
+                }
             }
 
             $store->markTerminated($serviceId);
@@ -499,8 +513,7 @@ final class Module
                 return self::confirmExistingDomain($api, $store, $customerId, $domain, $plan, $serviceId, $e);
             }
             if ($e->is(409, 'DOMAIN_REGISTERED_ELSEWHERE')) {
-                self::refuseWhileBeingRemoved($store, $clientId, $domain);
-                throw new ModuleException(self::registeredElsewhereMessage($domain));
+                throw new ModuleException(self::elsewhereMessage($store, $clientId, $domain));
             }
             if ($e->is(404)) {
                 return null;
@@ -564,8 +577,7 @@ final class Module
         string $plan
     ): array {
         $client = is_array($params['clientsdetails'] ?? null) ? $params['clientsdetails'] : [];
-        $email = self::stringParam($client, 'email');
-        $email = trim($email);
+        $email = trim(self::stringParam($client, 'email'));
         if ($email === '') {
             throw new ModuleException('The client has no email address. Add one to the client profile first.');
         }
@@ -586,9 +598,20 @@ final class Module
                 throw $e;
             }
             // CookiePal deletes a terminated customer a day later; until then it holds the domain and the email.
-            self::refuseWhileBeingRemoved($store, $clientId, $elsewhere ? $domain : null);
             if ($elsewhere) {
-                throw new ModuleException(self::registeredElsewhereMessage($domain));
+                throw new ModuleException(self::elsewhereMessage($store, $clientId, $domain));
+            }
+            $recent = self::recentlyTerminated($store, $clientId, null);
+            if ($recent !== null && self::isCustomerBeingRemoved($api, $recent->customerId)) {
+                throw new ModuleException(self::stillBeingRemovedMessage($recent));
+            }
+            if ($recent !== null) {
+                // Terminate removed only the website: the customer has other websites, so its user stays.
+                throw new ModuleException(
+                    'The email ' . $email . ' belongs to the CookiePal customer of this client\'s service #'
+                    . $recent->serviceId . ', which CookiePal kept when that service was terminated because it has '
+                    . 'other websites. Contact CookiePal support (' . self::SUPPORT_EMAIL . ') with both service IDs.'
+                );
             }
             throw new ModuleException(
                 'The email ' . $email . ' already has its own CookiePal account. Ask CookiePal support ('
@@ -604,23 +627,48 @@ final class Module
         return [$customerId, self::domainIdFrom($result)];
     }
 
-    /**
-     * @throws ModuleException when the client's service for this domain (or any, for a null domain) was
-     *     terminated in the last two days
-     */
-    private static function refuseWhileBeingRemoved(ServiceStore $store, int $clientId, ?string $domain): void
+    /** The client's service for this domain (or any, for a null domain) terminated in the last two days. */
+    private static function recentlyTerminated(ServiceStore $store, int $clientId, ?string $domain): ?ServiceRecord
     {
-        $recent = $clientId > 0
+        return $clientId > 0
             ? $store->findTerminatedForClientSince($clientId, ServiceStore::now(-self::REMOVAL_WINDOW_SECONDS), $domain)
             : null;
-        if ($recent !== null) {
-            throw new ModuleException(
-                'This client\'s CookiePal service #' . $recent->serviceId
-                . ' was terminated on ' . $recent->terminatedAt
-                . ' UTC, and CookiePal is still removing it, which takes about a day. Run Create again after that, '
-                . 'or contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
-            );
+    }
+
+    /** For a 409 DOMAIN_REGISTERED_ELSEWHERE: the client's own website being removed, or another account's. */
+    private static function elsewhereMessage(ServiceStore $store, int $clientId, string $domain): string
+    {
+        $recent = self::recentlyTerminated($store, $clientId, $domain);
+
+        return $recent !== null ? self::stillBeingRemovedMessage($recent) : self::registeredElsewhereMessage($domain);
+    }
+
+    private static function stillBeingRemovedMessage(ServiceRecord $recent): string
+    {
+        return 'This client\'s CookiePal service #' . $recent->serviceId
+            . ' was terminated on ' . $recent->terminatedAt
+            . ' UTC, and CookiePal is still removing it, which takes about a day. Run Create again after that, '
+            . 'or contact CookiePal support (' . self::SUPPORT_EMAIL . ').';
+    }
+
+    /**
+     * True when the customer is gone, or every website on it is being removed. A failed read counts as
+     * being removed, which keeps the message that was shown before this check.
+     */
+    private static function isCustomerBeingRemoved(ApiClient $api, string $customerId): bool
+    {
+        try {
+            $customer = $api->getCustomer($customerId);
+        } catch (ApiException) {
+            return true;
         }
+        foreach (self::domainsOf($customer) as $domain) {
+            if (!self::isBeingRemoved($domain)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** Saves the new ids, and leaves them in the Activity Log if the save fails. */

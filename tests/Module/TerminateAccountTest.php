@@ -9,6 +9,11 @@ use WHMCS\Module\Server\CookiePal\ServiceStore;
 
 final class TerminateAccountTest extends ModuleTestCase
 {
+    private const ONLY_ACTIVE_DOMAIN = [
+        'message' => "Cannot delete the customer's only active domain",
+        'code' => 'ONLY_ACTIVE_DOMAIN',
+    ];
+
     private function deleteDomainPath(string $domainId = 'example.com'): string
     {
         return '/external/domain/' . self::CUSTOMER . '/' . $domainId;
@@ -69,15 +74,31 @@ final class TerminateAccountTest extends ModuleTestCase
                 $this->domainItem('example.com'),
                 $this->domainItem('second.com', ['status' => 'inactive']),
             ]))
-            ->expect(
-                'DELETE',
-                $this->deleteDomainPath(),
-                400,
-                ['message' => "Cannot delete the customer's only active domain"]
-            );
+            ->expect('DELETE', $this->deleteDomainPath(), 400, self::ONLY_ACTIVE_DOMAIN);
 
         $this->assertSame(
-            "CookiePal API error (400): Cannot delete the customer's only active domain",
+            "CookiePal won't remove example.com because it's the customer's only active website, and service #102 "
+            . 'still uses that customer. Terminate service #102 first, then run Terminate again, or contact '
+            . 'CookiePal support (support@cookiepal.io).',
+            cookiepal_TerminateAccount($this->params())
+        );
+        $this->assertNull($this->terminatedAt());
+        $this->assertNull($this->terminatedAt(102));
+    }
+
+    public function testTheOnlyActiveWebsiteRefusalWithoutAnotherServiceIsReportedAsIs(): void
+    {
+        // CookiePal's view changed between the read and the delete: second.com stopped being active.
+        $this->seedService();
+        $this->transport
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('example.com'),
+                $this->domainItem('second.com'),
+            ]))
+            ->expect('DELETE', $this->deleteDomainPath(), 400, self::ONLY_ACTIVE_DOMAIN);
+
+        $this->assertSame(
+            "CookiePal API error (400): Cannot delete the customer's only active domain [ONLY_ACTIVE_DOMAIN]",
             cookiepal_TerminateAccount($this->params())
         );
         $this->assertNull($this->terminatedAt());

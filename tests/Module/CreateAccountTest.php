@@ -354,24 +354,133 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame(['POST /external/customer'], $this->transport->sent());
     }
 
-    /** @return array<string, array{array<string, string>}> */
-    public static function conflictsWhileBeingRemoved(): array
+    private static function stillRemoving(int $serviceId, string $terminatedAt): string
     {
-        return ['the domain' => [self::ELSEWHERE], 'the email' => [self::USER_EXISTS]];
+        return "This client's CookiePal service #" . $serviceId . ' was terminated on ' . $terminatedAt . ' UTC, and '
+            . 'CookiePal is still removing it, which takes about a day. Run Create again after that, or contact '
+            . 'CookiePal support (support@cookiepal.io).';
     }
 
-    /** @param array<string, string> $conflict */
-    #[DataProvider('conflictsWhileBeingRemoved')]
-    public function testOrderingAgainTheDayAfterTerminateSaysTheOldOneIsStillBeingRemoved(array $conflict): void
+    /** @return array<string, array{int}> */
+    public static function agesWithinTheRemovalWindow(): array
     {
-        $terminatedAt = ServiceStore::now(-3600);
+        return ['an hour' => [3600], '47 hours' => [47 * 3600]];
+    }
+
+    #[DataProvider('agesWithinTheRemovalWindow')]
+    public function testOrderingAgainWithinTwoDaysOfTerminateSaysTheOldOneIsStillBeingRemoved(int $age): void
+    {
+        $terminatedAt = ServiceStore::now(-$age);
         $this->seedService(100, 7, self::CUSTOMER, 'example.com', $terminatedAt);
+        $this->transport->expect('POST', '/external/customer', 409, self::ELSEWHERE);
+
+        $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
+        $this->assertNull($this->row(101));
+        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+    }
+
+    /** @return array<string, array{array<string, string>, int, non-empty-string}> */
+    public static function conflictsAfterTheRemovalWindow(): array
+    {
+        $domain = 'The domain example.com is already registered to another CookiePal account.';
+        $email = 'The email ada@example.com already has its own CookiePal account.';
+
+        return [
+            'the domain, 49 hours' => [self::ELSEWHERE, 49 * 3600, $domain],
+            'the domain, 3 days' => [self::ELSEWHERE, 3 * 86400, $domain],
+            'the email, 49 hours' => [self::USER_EXISTS, 49 * 3600, $email],
+            'the email, 3 days' => [self::USER_EXISTS, 3 * 86400, $email],
+        ];
+    }
+
+    /**
+     * @param array<string, string> $conflict
+     * @param non-empty-string $message
+     */
+    #[DataProvider('conflictsAfterTheRemovalWindow')]
+    public function testATerminationOlderThanTwoDaysGivesThePlainMessage(
+        array $conflict,
+        int $age,
+        string $message
+    ): void {
+        $this->seedService(100, 7, self::CUSTOMER, 'example.com', ServiceStore::now(-$age));
         $this->transport->expect('POST', '/external/customer', 409, $conflict);
 
+        $this->assertStringStartsWith($message, cookiepal_CreateAccount($this->params()));
+        $this->assertNull($this->row(101));
+        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+    }
+
+    public function testARecentTerminationOfAnotherWebsiteGivesThePlainMessage(): void
+    {
+        $this->seedService(100, 7, self::CUSTOMER, 'other.com', ServiceStore::now(-3600));
+        $this->transport->expect('POST', '/external/customer', 409, self::ELSEWHERE);
+
+        $this->assertStringStartsWith(
+            'The domain example.com is already registered to another CookiePal account.',
+            cookiepal_CreateAccount($this->params())
+        );
+    }
+
+    public function testAddingAWebsiteAfterARecentTerminationOfAnotherGivesThePlainMessage(): void
+    {
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'other.com', ServiceStore::now(-3600));
+        $this->seedService(102, 7, self::CUSTOMER, 'second.com');
+        $this->transport->expect('POST', '/external/domain', 409, self::ELSEWHERE);
+
+        $this->assertStringStartsWith(
+            'The domain example.com is already registered to another CookiePal account.',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertSame(['POST /external/domain'], $this->transport->sent());
+    }
+
+    public function testAnEmailOnACustomerBeingRemovedSaysToWait(): void
+    {
+        $terminatedAt = ServiceStore::now(-3600);
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', $terminatedAt);
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('first.com', ['scheduledDeletion' => '2026-11-27T10:00:00Z']),
+                $this->domainItem('old.com', ['status' => 'inactive']),
+            ]));
+
+        $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
+        $this->assertNull($this->row(101));
+    }
+
+    public function testAnEmailOnACustomerAlreadyGoneSaysToWait(): void
+    {
+        $terminatedAt = ServiceStore::now(-3600);
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', $terminatedAt);
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect(
+                'GET',
+                $this->customerPath(),
+                404,
+                ['message' => 'customer not found', 'code' => 'CUSTOMER_NOT_FOUND']
+            );
+
+        $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
+    }
+
+    public function testAnEmailOnACustomerKeptForItsOtherWebsitesSaysSo(): void
+    {
+        // Terminating service 100 removed only first.com: the customer has another website, so its user stays.
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', ServiceStore::now(-3600));
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('first.com', ['scheduledDeletion' => '2026-11-27T10:00:00Z']),
+                $this->domainItem('shop.example.org'),
+            ]));
+
         $this->assertSame(
-            "This client's CookiePal service #100 was terminated on " . $terminatedAt . ' UTC, and CookiePal is '
-            . 'still removing it, which takes about a day. Run Create again after that, or contact CookiePal support '
-            . '(support@cookiepal.io).',
+            "The email ada@example.com belongs to the CookiePal customer of this client's service #100, which "
+            . 'CookiePal kept when that service was terminated because it has other websites. Contact CookiePal '
+            . 'support (support@cookiepal.io) with both service IDs.',
             cookiepal_CreateAccount($this->params())
         );
         $this->assertNull($this->row(101));
