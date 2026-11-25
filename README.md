@@ -76,7 +76,7 @@ On the service's page, the client sees:
 
 The page waits at most 5 seconds for CookiePal; if CookiePal doesn't answer in time, the client sees a short "try again later" notice instead.
 
-The text comes from `modules/servers/cookiepal/lang/english.php`. To translate it, copy that file to `lang/<language>.php` (the WHMCS language name, for example `french.php`) and change the values. Any string you leave out stays in English. The module uses the client's language, else the language of the current session, else WHMCS's default language.
+The text comes from `modules/servers/cookiepal/lang/english.php`. To translate it, copy that file to `lang/<language>.php` (the WHMCS language name, for example `french.php`) and change the values. Any string you leave out stays in English, and if the file has an error the client sees English. The module uses the client's language, else the language of the current session, else WHMCS's default language.
 
 ## 6. Single sign-on
 
@@ -101,7 +101,9 @@ Open **Configuration > System Logs > Module Log** and turn on debug logging, rep
 | The domain … is already registered to another CookiePal account. | The website is already on CookiePal under another account, which can be another customer of your own agency. The customer can remove it there, or ask CookiePal support to move it to your agency. |
 | The email … already has its own CookiePal account. | The client already uses CookiePal on their own. Ask CookiePal support to link that account to your agency, then run Create again. |
 | This client's CookiePal service #… was terminated on …, and CookiePal is still removing it / The website … is being removed from CookiePal | The client's earlier service for this website or account was terminated, and CookiePal deletes it a day later. Run Create again the next day, or contact CookiePal support. |
+| The email … belongs to the CookiePal customer of this client's service #…, which CookiePal kept | That service was terminated recently, but its CookiePal customer stays because it has other websites, so its email can't start a new customer. Contact CookiePal support with both service IDs. |
 | This website already belongs to service #… | Another service already has this website. Terminate that service first, or cancel the new order. |
+| CookiePal won't remove … because it's the customer's only active website, and service #… still uses that customer | The other service's website isn't active in CookiePal, so CookiePal keeps this one. Terminate the other service first, then run Terminate again on this one; or contact CookiePal support. |
 | The customer pays for this website's plan in CookiePal themselves | The client upgraded inside CookiePal, so the plan is no longer yours to change. |
 | This website has more traffic than the free plan allows. | Choose a paid plan. |
 | Another plan change for this website was in progress. | Run the action again in a minute. |
@@ -118,7 +120,7 @@ Every WHMCS error message is also in the WHMCS Activity Log.
 ```sh
 composer install
 vendor/bin/phpunit
-scripts/build-zip.sh        # dist/cookiepal-whmcs-<version>.zip
+scripts/build-zip.sh        # dist/cookiepal-whmcs-<version>.zip, from the last commit
 ```
 
 Or, without PHP installed:
@@ -130,7 +132,7 @@ docker run --rm -v "$PWD":/app -w /app php:8.3-cli vendor/bin/phpunit
 
 The tests replace WHMCS's `logModuleCall`, `logActivity`, `Capsule` and settings with stubs (`tests/Stubs/`) and the HTTP transport with a fake (`tests/Support/FakeTransport.php`), so they need neither WHMCS nor the network. The client area template is rendered with Smarty.
 
-To release, set `Module::VERSION` and date the version's heading in `CHANGELOG.md`, then push a `v<version>` tag. The release workflow checks that the three agree, builds the zip and attaches it to the GitHub release.
+To release, set `Module::VERSION` and date the version's heading in `CHANGELOG.md`, then push a `v<version>` tag. The release workflow runs the CI tests on the tagged commit, checks that the three agree, builds the zip and attaches it to the GitHub release.
 
 ## Security
 
