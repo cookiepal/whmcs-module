@@ -1,0 +1,35 @@
+{
+    "schema": "1.0",
+    "type": "whmcs-servers",
+    "name": "cookiepal",
+    "license": "MIT",
+    "category": "provisioning",
+    "description": {
+        "name": "CookiePal",
+        "tagline": "Sell the CookiePal cookie consent banner to your customers, provisioned automatically.",
+        "long": "CookiePal is a cookie consent banner for GDPR, CCPA and other privacy laws. This module creates, suspends, upgrades and removes each customer's CookiePal website from WHMCS, shows the banner's install code in the client area, and signs the customer in to their CookiePal dashboard with one click.",
+        "features": [
+            "Create, suspend, unsuspend, upgrade and terminate CookiePal websites",
+            "One CookiePal account per client, with a website per service",
+            "Banner install code and installation status in the client area",
+            "Single sign-on to the CookiePal dashboard",
+            "Start a cookie scan and refresh the status from the admin area"
+        ]
+    },
+    "logo": {
+        "filename": "logo.png"
+    },
+    "support": {
+        "homepage": "https://cookiepal.io/",
+        "learn_more": "https://cookiepal.io/",
+        "email": "support@cookiepal.io",
+        "support_url": "https://cookiepal.io/support",
+        "docs_url": "https://github.com/cookiepal/whmcs-module#readme"
+    },
+    "authors": [
+        {
+            "name": "CookiePal",
+            "homepage": "https://cookiepal.io/"
+        }
+    ]
+}
