@@ -195,7 +195,7 @@ final class CreateAccountTest extends ModuleTestCase
 
         $this->assertSame(
             "The email ada@example.com already has a CookiePal account through this client's service #100, which "
-            . "WHMCS no longer has on a server, and this server's API key doesn't own that account. Contact "
+            . "WHMCS no longer has on a server, and this server's API key couldn't use that account. Contact "
             . 'CookiePal support (support@cookiepal.io) with both service IDs.',
             cookiepal_CreateAccount($this->params())
         );

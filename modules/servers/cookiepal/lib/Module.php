@@ -710,7 +710,7 @@ final class Module
                 if ($elsewhereLive->serverId === 0) {
                     // A row from before the table had server_id, of a service WHMCS has on no server now.
                     throw new ModuleException(
-                        $through . ', which WHMCS no longer has on a server, and this server\'s API key doesn\'t own '
+                        $through . ', which WHMCS no longer has on a server, and this server\'s API key couldn\'t use '
                         . 'that account. Contact CookiePal support (' . self::SUPPORT_EMAIL . ') with both service IDs.'
                     );
                 }
