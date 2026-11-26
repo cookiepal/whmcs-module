@@ -28,6 +28,9 @@ final class ApiClient
 
     private const RETRY_STATUSES = [502, 503, 504];
 
+    /** The HTTP status of the last call's answer; 0 before any call, and when the last call got no answer. */
+    private int $lastStatus = 0;
+
     private function __construct(
         private readonly string $host,
         private readonly string $apiKey,
@@ -99,7 +102,8 @@ final class ApiClient
 
     /**
      * POST /external/customer: 201 `{ customerId, customerName, customerEmail, domain: { domainId, handler, plan } }`,
-     * or 200 with the same body when CookiePal replays an earlier call that had the same idempotency key.
+     * or 200 with the same fields when CookiePal replays an earlier call that had the same idempotency key. A replay
+     * has the plan the website has now, not the one sent; lastStatus() tells the two answers apart.
      *
      * @return array<mixed>
      */
@@ -119,8 +123,8 @@ final class ApiClient
     }
 
     /**
-     * POST /external/domain: 201 `{ customerId, domain: { domainId, handler, plan } }`, or 200 with the same body
-     * when CookiePal replays an earlier call that had the same idempotency key.
+     * POST /external/domain: 201 `{ customerId, domain: { domainId, handler, plan } }`, or 200 with the same fields
+     * when CookiePal replays an earlier call that had the same idempotency key, with the plan the website has now.
      *
      * @return array<mixed>
      */
@@ -225,6 +229,15 @@ final class ApiClient
     }
 
     /**
+     * The HTTP status this client's last call was answered with (200 for a replayed create, 201 for a new one);
+     * 0 before any call, and after a call that got no answer.
+     */
+    public function lastStatus(): int
+    {
+        return $this->lastStatus;
+    }
+
+    /**
      * One API call. Returns the decoded JSON body, or [] for an empty 2xx body.
      *
      * @param non-empty-string $method
@@ -258,6 +271,7 @@ final class ApiClient
             $headers['Content-Type'] = 'application/json';
         }
 
+        $this->lastStatus = 0;
         $isRead = $method === 'GET';
         $timeout = $this->forPage ? self::PAGE_TIMEOUT : ($isRead ? self::READ_TIMEOUT : self::WRITE_TIMEOUT);
         $attempts = $isRead && !$this->forPage ? 2 : 1;
@@ -273,6 +287,7 @@ final class ApiClient
             if ($attempt < $attempts && in_array($response['status'], self::RETRY_STATUSES, true)) {
                 continue;
             }
+            $this->lastStatus = $response['status'];
 
             return $this->decode($response['status'], $response['body']);
         }

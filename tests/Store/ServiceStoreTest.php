@@ -169,6 +169,23 @@ final class ServiceStoreTest extends TestCase
         $this->assertNull($this->store->findLiveForClientOnOtherServer(7, 1));
     }
 
+    public function testAServiceLeftAtServerZeroCountsAsOnAnotherServer(): void
+    {
+        // The migration leaves 0 on a service WHMCS no longer has: Create still asks whether its key owns the customer.
+        $this->seed([
+            'service_id' => 1, 'server_id' => 2, 'client_id' => 7, 'customer_id' => 'a', 'domain_id' => 'a.com',
+        ]);
+        $this->seed([
+            'service_id' => 2, 'server_id' => 0, 'client_id' => 7, 'customer_id' => 'b', 'domain_id' => 'b.com',
+            'created_at' => '2026-12-01 00:00:00',
+        ]);
+
+        $this->assertSame(2, $this->store->findLiveForClientOnOtherServer(7, 1)?->serviceId);
+        $this->assertSame(0, $this->store->findLiveForClientOnOtherServer(7, 1)?->serverId);
+        $this->assertSame(2, $this->store->findLiveForClientOnOtherServer(7, 2)?->serviceId);
+        $this->assertSame(1, $this->store->findLiveForClientOnOtherServer(7, 0)?->serviceId);
+    }
+
     /** A mod_cookiepal_services table as a build before server_id created it, with two rows. */
     private function seedTableWithoutServerId(): void
     {

@@ -168,6 +168,44 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame(['GET', 'POST'], array_column($this->transport->requests, 'method'));
     }
 
+    public function testAServiceWhmcsNoLongerHasStillSharesTheCustomerThisKeyOwns(): void
+    {
+        // Its row was left at server 0 when the server column was added; its customer is still this agency's.
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 0);
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 200, $this->customerBody(
+                [$this->domainItem('first.com')],
+                self::OTHER_CUSTOMER
+            ))
+            ->expect('POST', '/external/domain', 201, $this->addedDomainBody('example.com', self::OTHER_CUSTOMER));
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(self::OTHER_CUSTOMER, $this->transport->requests[1]['json']['customerId'] ?? null);
+        $this->assertSame(self::OTHER_CUSTOMER, $this->row(101)['customer_id'] ?? null);
+        $this->assertSame(1, $this->row(101)['server_id'] ?? null);
+    }
+
+    public function testAServiceWhmcsNoLongerHasIsNotCalledAnotherServer(): void
+    {
+        // There is no server to name, so the message says what happened to the service instead.
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 0);
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 401, ['message' => 'Customer does not belong'])
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS);
+
+        $this->assertSame(
+            "The email ada@example.com already has a CookiePal account through this client's service #100, which "
+            . "WHMCS no longer has on a server, and this server's API key doesn't own that account. Contact "
+            . 'CookiePal support (support@cookiepal.io) with both service IDs.',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertSame(
+            ['GET ' . $this->customerPath(self::OTHER_CUSTOMER), 'POST /external/customer'],
+            $this->transport->sent()
+        );
+        $this->assertNull($this->row(101));
+    }
+
     public function testAFailedReadOfTheOtherServersCustomerFailsTheCreate(): void
     {
         $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
@@ -219,6 +257,204 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame(self::KEY, $this->transport->requests[0]['json']['idempotencyKey'] ?? null);
         $this->assertSame(self::CUSTOMER, $this->row(101)['customer_id'] ?? null);
         $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
+    }
+
+    public function testAReplayOnTheProductsPlanMakesNoPlanCall(): void
+    {
+        $this->transport->expect('POST', '/external/customer', 200, $this->createdCustomerBody());
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+
+        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+        $this->assertSame(self::CUSTOMER, $this->row()['customer_id'] ?? null);
+    }
+
+    /** @return array<string, array{0: string|null}> */
+    public static function replayedPlans(): array
+    {
+        return [
+            'another of the four' => ['starter'],
+            'one outside the four' => ['other'],
+            'none' => [null],
+        ];
+    }
+
+    #[DataProvider('replayedPlans')]
+    public function testAReplayOnAnotherPlanIsMovedToTheProductsPlan(?string $replayed): void
+    {
+        $body = $this->createdCustomerBody();
+        $body['domain']['plan'] = $replayed;
+        $this->transport
+            ->expect('POST', '/external/customer', 200, $body)
+            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+
+        $this->assertSame(['POST /external/customer', 'PUT ' . $this->domainPath('/plan')], $this->transport->sent());
+        $this->assertSame(['plan' => 'growth'], $this->transport->requests[1]['json']);
+        $this->assertSame(self::CUSTOMER, $this->row()['customer_id'] ?? null);
+    }
+
+    public function testAnAddedWebsiteReplayedOnAnotherPlanIsMovedToTheProductsPlan(): void
+    {
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com');
+        $this->transport
+            ->expect('POST', '/external/domain', 200, $this->addedDomainBody('example.com', plan: 'business'))
+            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+
+        $this->assertSame(['POST /external/domain', 'PUT ' . $this->domainPath('/plan')], $this->transport->sent());
+        $this->assertSame(['plan' => 'growth'], $this->transport->requests[1]['json']);
+        $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
+    }
+
+    public function testANewWebsiteIsTakenOnThePlanSent(): void
+    {
+        $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody(plan: 'starter'));
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+
+        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+    }
+
+    /** @return array<string, array{0: int, 1: array<string, string>, 2: string}> */
+    public static function failedPlanCalls(): array
+    {
+        return [
+            'a plan change in progress' => [
+                409,
+                ['message' => 'conflict', 'code' => 'PLAN_CHANGE_CONFLICT'],
+                'Another plan change for this website was in progress. Try again in a minute.',
+            ],
+            'a plan the customer pays for' => [
+                409,
+                ['message' => 'conflict', 'code' => 'PLAN_NOT_MANAGED_BY_AGENCY'],
+                "The customer pays for this website's plan in CookiePal themselves, so WHMCS can't change it.",
+            ],
+            'a server error' => [
+                500,
+                ['message' => 'Internal server error'],
+                'CookiePal API error (500): Internal server error',
+            ],
+            'no answer' => [0, [], "Couldn't reach CookiePal (curl error 28): Operation timed out"],
+        ];
+    }
+
+    /** @param array<string, string> $answer */
+    #[DataProvider('failedPlanCalls')]
+    public function testAFailedPlanCallAfterAReplaySavesNothingAndCreateAgainRetriesIt(
+        int $status,
+        array $answer,
+        string $message
+    ): void {
+        $this->transport->expect('POST', '/external/customer', 200, $this->createdCustomerBody(plan: 'starter'));
+        if ($status === 0) {
+            $this->transport->expectNetworkError('PUT', $this->domainPath('/plan'));
+        } else {
+            $this->transport->expect('PUT', $this->domainPath('/plan'), $status, $answer);
+        }
+
+        // The same message Create gives when the plan call fails for a domain found on the customer.
+        $this->assertSame($message, cookiepal_CreateAccount($this->params()));
+        $this->assertNull($this->row());
+
+        $this->transport
+            ->expect('POST', '/external/customer', 200, $this->createdCustomerBody(plan: 'starter'))
+            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(
+            [self::KEY, null, self::KEY, null],
+            array_map(fn (array $r): mixed => $r['json']['idempotencyKey'] ?? null, $this->transport->requests)
+        );
+        $this->assertSame(['plan' => 'growth'], $this->transport->requests[3]['json']);
+        $this->assertSame(self::CUSTOMER, $this->row()['customer_id'] ?? null);
+        $this->assertSame('example.com', $this->row()['domain_id'] ?? null);
+    }
+
+    public function testAFailedPlanCallAfterAReplayOnAnAddedWebsiteSavesNothing(): void
+    {
+        // A 404 here fails the Create: it must not be read as "the customer is gone", which starts a new customer.
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com');
+        $this->transport
+            ->expect('POST', '/external/domain', 200, $this->addedDomainBody('example.com', plan: 'free'))
+            ->expect('PUT', $this->domainPath('/plan'), 404, ['message' => 'domain not found']);
+
+        $this->assertSame('CookiePal API error (404): domain not found', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(['POST /external/domain', 'PUT ' . $this->domainPath('/plan')], $this->transport->sent());
+        $this->assertNull($this->row(101));
+
+        $this->transport
+            ->expect('POST', '/external/domain', 200, $this->addedDomainBody('example.com', plan: 'free'))
+            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(self::KEY, $this->transport->requests[2]['json']['idempotencyKey'] ?? null);
+        $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
+    }
+
+    public function testAReplayOnAServiceCreatedAgainAfterTerminateKeepsItsKeyUntilItIsSaved(): void
+    {
+        $this->seedService(101, 7, self::OTHER_CUSTOMER, 'old.com', '2026-11-20 09:30:00');
+        $this->transport
+            ->expect('POST', '/external/customer', 200, $this->createdCustomerBody(plan: 'starter'))
+            ->expect('PUT', $this->domainPath('/plan'), 500, ['message' => 'Internal server error'])
+            ->expect('POST', '/external/customer', 200, $this->createdCustomerBody(plan: 'starter'))
+            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+
+        $this->assertSame('CookiePal API error (500): Internal server error', cookiepal_CreateAccount($this->params()));
+        // Still the terminated row, so the next Create builds the same key and replays again.
+        $this->assertSame('2026-11-20 09:30:00', $this->terminatedAt());
+        $this->assertSame(self::OTHER_CUSTOMER, $this->row()['customer_id'] ?? null);
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame(
+            [self::KEY . '-20261120093000', self::KEY . '-20261120093000'],
+            [
+                $this->transport->requests[0]['json']['idempotencyKey'] ?? null,
+                $this->transport->requests[2]['json']['idempotencyKey'] ?? null,
+            ]
+        );
+        $this->assertCount(1, FakeDatabase::$tables[ServiceStore::TABLE]);
+        $this->assertSame(self::CUSTOMER, $this->row()['customer_id'] ?? null);
+        $this->assertNull($this->terminatedAt());
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function plansOfATakenWebsite(): array
+    {
+        return ["the product's plan" => ['growth'], 'another plan' => ['starter']];
+    }
+
+    #[DataProvider('plansOfATakenWebsite')]
+    public function testAReplayedWebsiteAnotherServiceTookMeanwhileIsRefused(string $replayed): void
+    {
+        // Service 101's first answer was lost; service 102 then ordered the same domain and got the website.
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com');
+        $this->seedService(102, 7, self::CUSTOMER, 'example.com', createdAt: '2026-11-19 10:00:00');
+        $this->transport
+            ->expect('POST', '/external/domain', 200, $this->addedDomainBody('example.com', plan: $replayed));
+
+        $this->assertSame(
+            'This website already belongs to service #102. Terminate that service first, or cancel this order.',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertSame(['POST /external/domain'], $this->transport->sent());
+        $this->assertNull($this->row(101));
+    }
+
+    public function testAReplayedNewCustomersWebsiteAnotherServiceHasIsRefused(): void
+    {
+        $this->seedService(102, 8, self::CUSTOMER, 'example.com');
+        $this->transport->expect('POST', '/external/customer', 200, $this->createdCustomerBody(plan: 'starter'));
+
+        $this->assertSame(
+            'This website already belongs to service #102. Terminate that service first, or cancel this order.',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+        $this->assertNull($this->row(101));
     }
 
     public function testTheKeyIsInTheModuleLogUnmasked(): void

@@ -55,7 +55,10 @@ final class ServiceStore
             ->first());
     }
 
-    /** The client's newest live service on any CookiePal server other than $serverId. */
+    /**
+     * The client's newest live service on any CookiePal server other than $serverId. A row left at server 0
+     * (see addServerId) counts: its customer can still belong to the key of the server asking.
+     */
     public function findLiveForClientOnOtherServer(int $clientId, int $serverId): ?ServiceRecord
     {
         $this->ensureTable();
@@ -180,7 +183,9 @@ final class ServiceStore
 
     /**
      * A table from a build before server_id: adds the column, and fills it with each service's server as WHMCS
-     * has it now (tblhosting.server). A service WHMCS no longer has keeps 0, which no live lookup matches.
+     * has it now (tblhosting.server). A service WHMCS no longer has, or has on no server, keeps 0. No real server's
+     * same-server lookup matches 0; the other-server lookup does, and Create reuses that customer only when the
+     * key of the server it runs on owns it.
      */
     private static function addServerId(): void
     {
