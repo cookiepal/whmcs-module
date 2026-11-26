@@ -46,6 +46,8 @@
             <p class="mb-0">{$cookiepalLang.terminated|escape}</p>
         {elseif $cookiepal.state == 'missing'}
             <div class="alert alert-warning mb-0" role="alert">{$cookiepalLang.missing|escape}</div>
+        {elseif $cookiepal.state == 'unavailable'}
+            <div class="alert alert-warning mb-0" role="alert">{$cookiepalLang.unavailable|escape}</div>
         {elseif $cookiepal.state == 'error'}
             <div class="alert alert-warning mb-0" role="alert">{$cookiepalLang.error|escape}</div>
         {else}

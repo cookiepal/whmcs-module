@@ -81,10 +81,11 @@ final class CreateAccountTest extends ModuleTestCase
 
     public function testASecondServiceOfTheSameClientAddsADomainToItsCustomer(): void
     {
-        $this->seedService(100, 7, self::CUSTOMER, 'first.com');
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', serverId: 3);
         $this->transport->expect('POST', '/external/domain', 201, $this->addedDomainBody('example.com'));
 
-        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
+        $this->assertSame('success', cookiepal_CreateAccount($this->params(['serverid' => 3])));
+        $this->assertSame(3, $this->row(101)['server_id'] ?? null);
 
         $this->assertSame(
             [
@@ -98,14 +99,48 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
     }
 
-    public function testAServiceOnAnotherServerDoesNotShareItsCustomer(): void
+    private const OTHER_SERVER_MESSAGE = "The email ada@example.com already has a CookiePal account through this "
+        . "client's service #100, which is on another CookiePal server (WHMCS server #2). Put the client's CookiePal "
+        . 'products on the same server, or contact CookiePal support (support@cookiepal.io).';
+
+    public function testAServiceMovedToAnotherServerRecordStillSharesItsCustomer(): void
     {
-        // Service 100 is on WHMCS server 2, which can hold another agency's key: its customer isn't this one's.
+        // Service 100's row says server 2 (it was moved, or server 2 holds the same key): this key owns its customer.
         $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
-        $this->transport->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 200, $this->customerBody(
+                [$this->domainItem('first.com')],
+                self::OTHER_CUSTOMER
+            ))
+            ->expect('POST', '/external/domain', 201, $this->addedDomainBody('example.com', self::OTHER_CUSTOMER));
 
         $this->assertSame('success', cookiepal_CreateAccount($this->params()));
-        $this->assertSame(['POST /external/customer'], $this->transport->sent());
+        $this->assertSame(self::OTHER_CUSTOMER, $this->transport->requests[1]['json']['customerId'] ?? null);
+        $this->assertSame(self::OTHER_CUSTOMER, $this->row(101)['customer_id'] ?? null);
+        $this->assertSame(1, $this->row(101)['server_id'] ?? null);
+    }
+
+    /** @return array<string, array{int, array<string, string>}> */
+    public static function customersThisKeyDoesNotHave(): array
+    {
+        return [
+            "another agency's" => [401, ['message' => 'Customer does not belong to this agency']],
+            'gone' => [404, ['message' => 'customer not found', 'code' => 'CUSTOMER_NOT_FOUND']],
+        ];
+    }
+
+    /** @param array<string, string> $answer */
+    #[DataProvider('customersThisKeyDoesNotHave')]
+    public function testAServiceOnAnotherServerWhoseCustomerThisKeyDoesNotHaveStartsANewOne(
+        int $status,
+        array $answer
+    ): void {
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), $status, $answer)
+            ->expect('POST', '/external/customer', 201, $this->createdCustomerBody());
+
+        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
         $this->assertSame(1, $this->row(101)['server_id'] ?? null);
         $this->assertSame(self::CUSTOMER, $this->row(101)['customer_id'] ?? null);
     }
@@ -113,14 +148,33 @@ final class CreateAccountTest extends ModuleTestCase
     public function testAnEmailAlreadyUsedOnAnotherServerSaysSo(): void
     {
         $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
-        $this->transport->expect('POST', '/external/customer', 409, self::USER_EXISTS);
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 401, ['message' => 'Customer does not belong'])
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS);
 
-        $this->assertSame(
-            "The email ada@example.com already has a CookiePal account through this client's service #100, which "
-            . "is on another CookiePal server (WHMCS server #2). Put the client's CookiePal products on the same "
-            . 'server, or contact CookiePal support (support@cookiepal.io).',
-            cookiepal_CreateAccount($this->params())
-        );
+        $this->assertSame(self::OTHER_SERVER_MESSAGE, cookiepal_CreateAccount($this->params()));
+        $this->assertNull($this->row(101));
+    }
+
+    public function testTheOtherServerIsNamedBeforeARecentTermination(): void
+    {
+        $this->seedService(99, 7, self::CUSTOMER, 'old.com', ServiceStore::now(-3600));
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 401, ['message' => 'Customer does not belong'])
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS);
+
+        $this->assertSame(self::OTHER_SERVER_MESSAGE, cookiepal_CreateAccount($this->params()));
+        $this->assertSame(['GET', 'POST'], array_column($this->transport->requests, 'method'));
+    }
+
+    public function testAFailedReadOfTheOtherServersCustomerFailsTheCreate(): void
+    {
+        $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
+        $this->transport
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 500, ['message' => 'Internal server error']);
+
+        $this->assertSame('CookiePal API error (500): Internal server error', cookiepal_CreateAccount($this->params()));
         $this->assertNull($this->row(101));
     }
 
@@ -283,20 +337,24 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
     }
 
-    public function testAnInactiveWebsiteThatIsNotScheduledForDeletionIsReused(): void
+    public function testAnInactiveWebsiteThatIsNotScheduledForDeletionIsRefusedWithItsOwnMessage(): void
     {
-        // Inactive isn't always being removed: such a website stays on the customer until something deletes it.
+        // Inactive isn't always being removed, and nothing the module does reactivates it.
         $this->seedService(100, 7, self::CUSTOMER, 'first.com');
         $this->transport
             ->expect('POST', '/external/domain', 409, self::DOMAIN_EXISTS)
             ->expect('GET', $this->customerPath(), 200, $this->customerBody([
                 $this->domainItem('first.com'),
                 $this->domainItem('example.com', ['status' => 'inactive']),
-            ]))
-            ->expect('PUT', $this->domainPath('/plan'), 200, self::PLAN_SET);
+            ]));
 
-        $this->assertSame('success', cookiepal_CreateAccount($this->params()));
-        $this->assertSame('example.com', $this->row(101)['domain_id'] ?? null);
+        $this->assertSame(
+            "The website example.com is already on this client's CookiePal customer, but it's inactive in CookiePal, "
+            . "so Create can't use it. Contact CookiePal support (support@cookiepal.io) to reactivate or remove it, "
+            . 'then run Create again.',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertNull($this->row(101));
     }
 
     public function testADomainWithoutAStatusIsActive(): void
@@ -577,6 +635,20 @@ final class CreateAccountTest extends ModuleTestCase
             ]));
 
         $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
+    }
+
+    public function testAnEmailOnARecentCustomerThisKeyDoesNotOwnGetsThePlainMessage(): void
+    {
+        // Service 100 was on another agency's key (its server record since changed): a 401 says nothing here.
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', ServiceStore::now(-3600));
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect('GET', $this->customerPath(), 401, ['message' => 'Customer does not belong to this agency']);
+
+        $this->assertStringStartsWith(
+            'The email ada@example.com already has its own CookiePal account.',
+            cookiepal_CreateAccount($this->params())
+        );
     }
 
     public function testAnEmailOnACustomerAlreadyGoneSaysToWait(): void

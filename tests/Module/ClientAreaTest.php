@@ -6,6 +6,7 @@ namespace CookiePal\Tests\Module;
 
 use CookiePal\Tests\Support\ModuleLog;
 use CookiePal\Tests\Support\ModuleTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use WHMCS\Module\Server\CookiePal\Module;
 use WHMCS\Module\Server\CookiePal\Transport;
 
@@ -167,6 +168,31 @@ final class ClientAreaTest extends ModuleTestCase
 
         $this->assertSame('missing', cookiepal_ClientArea($this->params())['templateVariables']['cookiepal']['state']);
         $this->assertCount(1, $this->transport->requests);
+    }
+
+    /** @return array<string, array{int, array<string, string>}> */
+    public static function answersWaitingWontChange(): array
+    {
+        return [
+            "another agency's customer" => [401, ['message' => 'Customer does not belong to this agency']],
+            'a refused key' => [403, ['message' => 'Forbidden']],
+        ];
+    }
+
+    /** @param array<string, string> $answer */
+    #[DataProvider('answersWaitingWontChange')]
+    public function testAnAnswerWaitingWontChangeTellsTheClientToContactTheHost(int $status, array $answer): void
+    {
+        $this->seedService();
+        $this->transport->expect('GET', $this->customerPath(), $status, $answer);
+
+        $html = $this->render(cookiepal_ClientArea($this->params()));
+
+        $this->assertStringContainsString(
+            'We can&#039;t load your CookiePal details because of a problem on our side. Contact us so we can fix it.',
+            $html
+        );
+        $this->assertStringNotContainsString('dosinglesignon', $html);
     }
 
     public function testTheClientAreaForAWebsiteNoLongerThere(): void

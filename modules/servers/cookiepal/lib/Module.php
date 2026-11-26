@@ -62,6 +62,9 @@ final class Module
             // A second order from the same client, on the same CookiePal server, adds a website to its customer.
             $serverId = self::intParam($params, 'serverid');
             $live = $clientId > 0 ? $store->findLiveForClient($clientId, $serverId, $serviceId) : null;
+            if ($live === null && $clientId > 0) {
+                $live = self::ownedOnOtherServer($api, $store, $clientId, $serverId);
+            }
             if ($live !== null) {
                 $domainId = self::addDomainToCustomer(
                     $api,
@@ -183,8 +186,9 @@ final class Module
                     self::ignoreNotFound(fn () => $api->deleteDomain($record->customerId, $record->domainId));
                 } catch (ApiException $e) {
                     if (!self::isUsable($own) && $e->is(400)) {
-                        // An inactive website: the API's "only active domain" check can still refuse it when exactly
-                        // one other website is active. The service ends anyway; the website was already inactive.
+                        // An inactive website the API won't delete: its "only active domain" check can count against
+                        // it when exactly one other website is active. The service ends; the website stays inactive.
+                        // Any 400 counts, since the route's other 400 has no code to tell them apart.
                         Logger::activity(
                             'service #' . $serviceId . ' is terminated, but CookiePal didn\'t delete its inactive '
                             . 'website ' . $record->domainId . ' on customer ' . $record->customerId . ': '
@@ -325,8 +329,13 @@ final class Module
             if (!$e instanceof ApiException) {
                 Logger::unexpected('ClientArea', $params, $e);
             }
-            // A 404: the customer is gone from CookiePal, which waiting won't change.
-            $view['state'] = $e instanceof ApiException && $e->is(404) ? 'missing' : 'error';
+            // Waiting changes neither a 404 (the customer is gone) nor a 401 or 403 (the key doesn't own it, or was
+            // refused): the client gets a notice to contact the host instead of "try again later".
+            $view['state'] = match (true) {
+                $e instanceof ApiException && $e->is(404) => 'missing',
+                $e instanceof ApiException && ($e->is(401) || $e->is(403)) => 'unavailable',
+                default => 'error',
+            };
         }
 
         return [
@@ -551,6 +560,33 @@ final class Module
     }
 
     /**
+     * The client's live service recorded on another WHMCS server, when this server's key owns its customer: the
+     * service was moved to another server record, or two server records hold the same agency key. Null when the
+     * key doesn't own it (401: another agency's customer) or it's gone (404); then Create starts a new customer.
+     */
+    private static function ownedOnOtherServer(
+        ApiClient $api,
+        ServiceStore $store,
+        int $clientId,
+        int $serverId
+    ): ?ServiceRecord {
+        $other = $store->findLiveForClientOnOtherServer($clientId, $serverId);
+        if ($other === null) {
+            return null;
+        }
+        try {
+            $api->getCustomer($other->customerId);
+        } catch (ApiException $e) {
+            if ($e->is(401) || $e->is(404)) {
+                return null;
+            }
+            throw $e;
+        }
+
+        return $other;
+    }
+
+    /**
      * The domain is already on this customer: an earlier Create whose answer was lost, or a second
      * order for the same website. Only the first is completed, and on the product's plan.
      */
@@ -572,6 +608,14 @@ final class Module
             throw new ModuleException(
                 'The website ' . $domain . ' is being removed from CookiePal, so it can\'t be added again yet. '
                 . 'Try again tomorrow, or contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
+            );
+        }
+        // Inactive for another reason: nothing the module does reactivates it.
+        if (!self::isUsable($found)) {
+            throw new ModuleException(
+                'The website ' . $domain . ' is already on this client\'s CookiePal customer, but it\'s inactive in '
+                . 'CookiePal, so Create can\'t use it. Contact CookiePal support (' . self::SUPPORT_EMAIL . ') to '
+                . 'reactivate or remove it, then run Create again.'
             );
         }
         $domainId = (string) $found['domainId'];
@@ -643,10 +687,11 @@ final class Module
                 );
             }
             $recent = self::recentlyTerminated($store, $clientId, null);
-            if ($recent !== null && self::isCustomerBeingRemoved($api, $recent->customerId)) {
+            $state = $recent !== null ? self::recentCustomerState($api, $recent->customerId) : 'unknown';
+            if ($recent !== null && $state === 'removing') {
                 throw new ModuleException(self::stillBeingRemovedMessage($recent));
             }
-            if ($recent !== null) {
+            if ($recent !== null && $state === 'kept') {
                 // Terminate removed only the website: the customer has other websites, so its user stays.
                 throw new ModuleException(
                     'The email ' . $email . ' belongs to the CookiePal customer of this client\'s service #'
@@ -693,23 +738,28 @@ final class Module
     }
 
     /**
-     * True when the customer is gone, or has no website that keeps it: deleting a customer makes all its
-     * websites inactive. A failed read counts as being removed, which keeps the message shown before this check.
+     * What became of a recently terminated service's customer:
+     * - 'removing': gone (404), or no website keeps it (deleting a customer makes all its websites inactive).
+     *   A failed read counts too, which keeps the message shown before this check.
+     * - 'kept': it still has a website that keeps it.
+     * - 'unknown': this key doesn't own it (401), so it says nothing about this agency's customers.
+     *
+     * @return 'removing'|'kept'|'unknown'
      */
-    private static function isCustomerBeingRemoved(ApiClient $api, string $customerId): bool
+    private static function recentCustomerState(ApiClient $api, string $customerId): string
     {
         try {
             $customer = $api->getCustomer($customerId);
-        } catch (ApiException) {
-            return true;
+        } catch (ApiException $e) {
+            return $e->is(401) ? 'unknown' : 'removing';
         }
         foreach (self::domainsOf($customer) as $domain) {
             if (self::isUsable($domain)) {
-                return false;
+                return 'kept';
             }
         }
 
-        return true;
+        return 'removing';
     }
 
     /** Saves the new ids, and leaves them in the Activity Log if the save fails. */

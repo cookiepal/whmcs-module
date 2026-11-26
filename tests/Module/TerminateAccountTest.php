@@ -105,7 +105,7 @@ final class TerminateAccountTest extends ModuleTestCase
         $this->assertNull($this->terminatedAt());
     }
 
-    public function testAnInactiveWebsiteIsDeletedAndInactiveOnesDoNotKeepTheCustomer(): void
+    public function testAnInactiveWebsiteIsDeleted(): void
     {
         $this->seedService();
         $this->seedService(102, 7, self::CUSTOMER, 'second.com');
@@ -135,8 +135,8 @@ final class TerminateAccountTest extends ModuleTestCase
 
     public function testAnInactiveWebsiteTheApiRefusesToDeleteStillEndsTheService(): void
     {
-        // Today's API counts active websites even when the one deleted is inactive, and refuses with
-        // exactly one other active. The website is already inactive, so the service ends; the log says so.
+        // The API's "only active domain" check can count against an inactive website when exactly one other
+        // is active. The website is already inactive, so the service ends; the Activity Log says so.
         $this->seedService();
         $this->seedService(102, 7, self::CUSTOMER, 'second.com');
         $this->transport
@@ -162,6 +162,49 @@ final class TerminateAccountTest extends ModuleTestCase
             ],
             ModuleLog::$activity
         );
+    }
+
+    public function testAnInactiveWebsiteRefusedWithoutAnotherLiveServiceStillEndsTheService(): void
+    {
+        // No other WHMCS service, but the customer has another active website made outside WHMCS.
+        $this->seedService();
+        $this->transport
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('example.com', ['status' => 'inactive']),
+                $this->domainItem('shop.example.org'),
+            ]))
+            ->expect(
+                'DELETE',
+                $this->deleteDomainPath(),
+                400,
+                ['message' => "Cannot delete the customer's only active domain"]
+            );
+
+        $this->assertSame('success', cookiepal_TerminateAccount($this->params()));
+        $this->assertNotNull($this->terminatedAt());
+        $this->assertCount(1, ModuleLog::$activity);
+    }
+
+    public function testAnInactiveWebsiteWhoseDeleteFailsOtherwiseLeavesTheServiceLive(): void
+    {
+        $this->seedService();
+        $this->seedService(102, 7, self::CUSTOMER, 'second.com');
+        $this->transport
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+                $this->domainItem('example.com', ['status' => 'inactive']),
+                $this->domainItem('second.com'),
+            ]))
+            ->expect('DELETE', $this->deleteDomainPath(), 500, ['message' => 'Internal server error']);
+
+        $this->assertSame(
+            'CookiePal API error (500): Internal server error',
+            cookiepal_TerminateAccount($this->params())
+        );
+        $this->assertNull($this->terminatedAt());
+        $this->assertSame([], array_filter(
+            ModuleLog::$activity,
+            fn (string $line): bool => str_contains($line, "didn't delete its inactive website")
+        ));
     }
 
     public function testAWebsiteAlreadyBeingRemovedIsNotDeletedAgainAndTheSharedCustomerStays(): void
