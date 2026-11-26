@@ -159,6 +159,69 @@ final class ServiceStoreTest extends TestCase
         $this->assertNull($this->store->findLiveForClientOnOtherServer(8, 1));
     }
 
+    public function testATerminatedServiceOnAnotherServerIsNotLive(): void
+    {
+        $this->seed([
+            'service_id' => 1, 'server_id' => 2, 'client_id' => 7, 'customer_id' => 'a', 'domain_id' => 'a.com',
+            'terminated_at' => '2026-11-20 10:00:00',
+        ]);
+
+        $this->assertNull($this->store->findLiveForClientOnOtherServer(7, 1));
+    }
+
+    /** A mod_cookiepal_services table as a build before server_id created it, with two rows. */
+    private function seedTableWithoutServerId(): void
+    {
+        FakeDatabase::$tables[ServiceStore::TABLE] = [
+            ['service_id' => 11, 'client_id' => 7, 'customer_id' => 'c', 'domain_id' => 'a.com',
+                'created_at' => '2026-11-20 10:00:00', 'terminated_at' => null],
+            ['service_id' => 12, 'client_id' => 7, 'customer_id' => 'c', 'domain_id' => 'b.com',
+                'created_at' => '2026-11-20 10:00:00', 'terminated_at' => null],
+        ];
+        FakeDatabase::$columns[ServiceStore::TABLE] = array_map(
+            fn (string $name): array => ['type' => 'x', 'name' => $name, 'arguments' => [], 'modifiers' => []],
+            ['service_id', 'client_id', 'customer_id', 'domain_id', 'created_at', 'terminated_at']
+        );
+        // Service 11 is on server 4 in WHMCS; service 12 is gone from WHMCS.
+        FakeDatabase::$tables['tblhosting'] = [['id' => 11, 'server' => 4]];
+    }
+
+    public function testAnOlderTableGainsServerIdFilledFromWhmcs(): void
+    {
+        $this->seedTableWithoutServerId();
+
+        $this->assertSame(4, $this->store->find(11)?->serverId);
+        $this->assertSame(0, $this->store->find(12)?->serverId);
+
+        $this->assertSame(1, FakeDatabase::$alterCalls);
+        $this->assertSame(0, FakeDatabase::$createCalls);
+        $added = end(FakeDatabase::$columns[ServiceStore::TABLE]);
+        $this->assertNotFalse($added);
+        $this->assertSame(
+            ['unsignedInteger', 'server_id', ['default']],
+            [$added['type'], $added['name'], $added['modifiers']]
+        );
+        $this->assertSame(11, $this->store->findLiveForClient(7, 4, 99)?->serviceId);
+    }
+
+    public function testAColumnAnotherRequestAddedFirstIsUsed(): void
+    {
+        $this->seedTableWithoutServerId();
+        FakeDatabase::$alterRace = true;
+
+        $this->assertSame(4, $this->store->find(11)?->serverId);
+        $this->assertSame(0, FakeDatabase::$alterCalls);
+    }
+
+    public function testANewTableIsNotAltered(): void
+    {
+        $this->store->find(1);
+        ServiceStore::resetForTests();
+        $this->store->find(1);
+
+        $this->assertSame(0, FakeDatabase::$alterCalls);
+    }
+
     public function testOtherLiveServicesOnACustomerOrWebsite(): void
     {
         $this->seed(['service_id' => 1, 'client_id' => 7, 'customer_id' => 'c', 'domain_id' => 'a.com']);

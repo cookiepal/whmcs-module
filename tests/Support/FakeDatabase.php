@@ -21,12 +21,19 @@ final class FakeDatabase
     /** When true, the next create() finds that another request created the table first. */
     public static bool $createRace = false;
 
+    public static int $alterCalls = 0;
+
+    /** When true, the next table() finds that another request added the column first. */
+    public static bool $alterRace = false;
+
     public static function reset(): void
     {
         self::$tables = [];
         self::$columns = [];
         self::$createCalls = 0;
         self::$createRace = false;
+        self::$alterCalls = 0;
+        self::$alterRace = false;
     }
 
     /** @param array<string, mixed> $row */

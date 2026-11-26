@@ -172,7 +172,33 @@ final class ServiceStore
                     throw $e;
                 }
             }
+        } elseif (!$schema->hasColumn(self::TABLE, 'server_id')) {
+            self::addServerId();
         }
         self::$tableReady = true;
+    }
+
+    /**
+     * A table from a build before server_id: adds the column, and fills it with each service's server as WHMCS
+     * has it now (tblhosting.server). A service WHMCS no longer has keeps 0, which no live lookup matches.
+     */
+    private static function addServerId(): void
+    {
+        try {
+            Capsule::schema()->table(self::TABLE, function ($table): void {
+                $table->unsignedInteger('server_id')->default(0);
+            });
+        } catch (\Throwable $e) {
+            // Two requests at once: the other one added it.
+            if (!Capsule::schema()->hasColumn(self::TABLE, 'server_id')) {
+                throw $e;
+            }
+        }
+        foreach (Capsule::table(self::TABLE)->get() as $row) {
+            $server = Capsule::table('tblhosting')->where('id', $row->service_id)->value('server');
+            Capsule::table(self::TABLE)
+                ->where('service_id', $row->service_id)
+                ->update(['server_id' => is_numeric($server) ? (int) $server : 0]);
+        }
     }
 }

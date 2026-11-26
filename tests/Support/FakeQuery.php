@@ -49,6 +49,18 @@ final class FakeQuery
         return $this;
     }
 
+    /** @return list<\stdClass> */
+    public function get(): array
+    {
+        return array_values(array_map(fn (array $row): \stdClass => (object) $row, $this->matching()));
+    }
+
+    /** The column of the first matching row, or null. */
+    public function value(string $column): mixed
+    {
+        return $this->first()?->{$column};
+    }
+
     public function first(): ?\stdClass
     {
         $rows = $this->matching();
