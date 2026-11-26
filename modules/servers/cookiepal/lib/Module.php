@@ -704,20 +704,21 @@ final class Module
             }
             $elsewhereLive = $clientId > 0 ? $store->findLiveForClientOnOtherServer($clientId, $serverId) : null;
             if ($elsewhereLive !== null) {
-                // The client's CookiePal user belongs to another agency key; this server's key can't reuse it.
+                // This server's key couldn't use that service's customer: another key owns it, or it is gone.
                 $through = 'The email ' . $email . ' already has a CookiePal account through this client\'s service #'
                     . $elsewhereLive->serviceId;
                 if ($elsewhereLive->serverId === 0) {
                     // A row from before the table had server_id, of a service WHMCS has on no server now.
                     throw new ModuleException(
-                        $through . ', which WHMCS no longer has on a server, and this server\'s API key doesn\'t own '
+                        $through . ', which WHMCS no longer has on a server, and this server\'s API key couldn\'t use '
                         . 'that account. Contact CookiePal support (' . self::SUPPORT_EMAIL . ') with both service IDs.'
                     );
                 }
                 throw new ModuleException(
                     $through . ', which is on another CookiePal server (WHMCS server #' . $elsewhereLive->serverId
-                    . '). Put the client\'s CookiePal products on the same server, or contact CookiePal support ('
-                    . self::SUPPORT_EMAIL . ').'
+                    . '), and this server\'s API key couldn\'t use that account. If the two servers use different '
+                    . 'API keys, put the client\'s CookiePal products on the same server. Otherwise contact CookiePal '
+                    . 'support (' . self::SUPPORT_EMAIL . ') with both service IDs.'
                 );
             }
             $recent = self::recentlyTerminated($store, $clientId, null);

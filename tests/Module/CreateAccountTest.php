@@ -100,8 +100,9 @@ final class CreateAccountTest extends ModuleTestCase
     }
 
     private const OTHER_SERVER_MESSAGE = "The email ada@example.com already has a CookiePal account through this "
-        . "client's service #100, which is on another CookiePal server (WHMCS server #2). Put the client's CookiePal "
-        . 'products on the same server, or contact CookiePal support (support@cookiepal.io).';
+        . "client's service #100, which is on another CookiePal server (WHMCS server #2), and this server's API key "
+        . "couldn't use that account. If the two servers use different API keys, put the client's CookiePal products "
+        . 'on the same server. Otherwise contact CookiePal support (support@cookiepal.io) with both service IDs.';
 
     public function testAServiceMovedToAnotherServerRecordStillSharesItsCustomer(): void
     {
@@ -145,11 +146,13 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame(self::CUSTOMER, $this->row(101)['customer_id'] ?? null);
     }
 
-    public function testAnEmailAlreadyUsedOnAnotherServerSaysSo(): void
+    /** @param array<string, string> $answer */
+    #[DataProvider('customersThisKeyDoesNotHave')]
+    public function testAnEmailAlreadyUsedOnAnotherServerSaysSo(int $status, array $answer): void
     {
         $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 2);
         $this->transport
-            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 401, ['message' => 'Customer does not belong'])
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), $status, $answer)
             ->expect('POST', '/external/customer', 409, self::USER_EXISTS);
 
         $this->assertSame(self::OTHER_SERVER_MESSAGE, cookiepal_CreateAccount($this->params()));
@@ -185,17 +188,19 @@ final class CreateAccountTest extends ModuleTestCase
         $this->assertSame(1, $this->row(101)['server_id'] ?? null);
     }
 
-    public function testAServiceWhmcsNoLongerHasIsNotCalledAnotherServer(): void
+    /** @param array<string, string> $answer */
+    #[DataProvider('customersThisKeyDoesNotHave')]
+    public function testAServiceWhmcsNoLongerHasIsNotCalledAnotherServer(int $status, array $answer): void
     {
         // There is no server to name, so the message says what happened to the service instead.
         $this->seedService(100, 7, self::OTHER_CUSTOMER, 'first.com', serverId: 0);
         $this->transport
-            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), 401, ['message' => 'Customer does not belong'])
+            ->expect('GET', $this->customerPath(self::OTHER_CUSTOMER), $status, $answer)
             ->expect('POST', '/external/customer', 409, self::USER_EXISTS);
 
         $this->assertSame(
             "The email ada@example.com already has a CookiePal account through this client's service #100, which "
-            . "WHMCS no longer has on a server, and this server's API key doesn't own that account. Contact "
+            . "WHMCS no longer has on a server, and this server's API key couldn't use that account. Contact "
             . 'CookiePal support (support@cookiepal.io) with both service IDs.',
             cookiepal_CreateAccount($this->params())
         );

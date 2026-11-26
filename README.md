@@ -10,7 +10,7 @@ Your WHMCS customers become customers of your CookiePal agency account. They sho
 
 ## 1. Ask CookiePal for an agency API key
 
-Email [support@cookiepal.io](mailto:support@cookiepal.io) from your agency account's email and ask for a WHMCS API key. You get a key that starts with `cpk_`. CookiePal shows it once, so store it somewhere safe.
+Email [support@cookiepal.io](mailto:support@cookiepal.io) from your agency account's email and ask for a WHMCS API key. You get a key that starts with `cpk_`. CookiePal shows it once, so store it somewhere safe. A new key can take up to a minute to start working.
 
 The key acts for your whole agency account. If it leaks, ask CookiePal to revoke it and issue a new one: the old key stops working within a minute.
 
@@ -92,7 +92,7 @@ Open **Configuration > System Logs > Module Log** and turn on debug logging, rep
 
 | Message | What to do |
 |---|---|
-| CookiePal refused the API key (403) | The key in the server's Password field is wrong or was revoked. Check it, or ask CookiePal for a new one. |
+| CookiePal refused the API key (403) | The key in the server's Password field is wrong or was revoked. Check it, or ask CookiePal for a new one. A key issued in the last minute may not work yet: wait a minute and try again. |
 | CookiePal received no API key (401) / No CookiePal API key | Enter the key in the server's Password field. |
 | This CookiePal API host doesn't have this feature yet (403) | The hostname points at a CookiePal API that doesn't have this action yet. Check the hostname is `agency-api.cookiepal.io`, or try again once CookiePal has released it. |
 | The server's hostname isn't a CookiePal API host | Set the server's Hostname to `agency-api.cookiepal.io`. |
@@ -102,8 +102,8 @@ Open **Configuration > System Logs > Module Log** and turn on debug logging, rep
 | The email … already has its own CookiePal account. | The client already uses CookiePal on their own. Ask CookiePal support to link that account to your agency, then run Create again. |
 | This client's CookiePal service #… was terminated on …, and CookiePal is still removing it / The website … is being removed from CookiePal | The client's earlier service for this website or account was terminated, and CookiePal deletes it a day later. Run Create again the next day, or contact CookiePal support. |
 | The email … belongs to the CookiePal customer of this client's service #…, which CookiePal kept | That service was terminated recently, but its CookiePal customer stays because it has other websites, so its email can't start a new customer. Contact CookiePal support with both service IDs. |
-| The email … already has a CookiePal account through this client's service #…, which is on another CookiePal server | A client's CookiePal services share one CookiePal customer, which belongs to the agency key of the server the first one was created on. Create checks first whether this server's key owns that customer, so a service moved to another server record, or two servers with the same key, work as one; this message means the key doesn't. Put the client's CookiePal products on the same server, or contact CookiePal support. |
-| The email … already has a CookiePal account through this client's service #…, which WHMCS no longer has on a server | The module's record of that service comes from an earlier version of the module, and WHMCS no longer has the service on a server: it was deleted without Terminate, or has no server assigned. Create checked whether this server's key owns that service's CookiePal customer, and it doesn't. Contact CookiePal support with both service IDs. |
+| The email … already has a CookiePal account through this client's service #…, which is on another CookiePal server | A client's CookiePal services share one CookiePal customer, which belongs to the agency key of the server the first one was created on. Create checks first whether this server's key can use that customer, so a service moved to another server record, or two servers with the same key, work as one; this message means it can't: another key owns it, or it is gone from CookiePal. If the two servers use different API keys, put the client's CookiePal products on the same server. Otherwise contact CookiePal support with both service IDs. |
+| The email … already has a CookiePal account through this client's service #…, which WHMCS no longer has on a server | The module's record of that service comes from an earlier version of the module, and WHMCS no longer has the service on a server: it was deleted without Terminate, or has no server assigned. Create checked whether this server's key can use that service's CookiePal customer, and it can't: another key owns it, or it is gone from CookiePal. Contact CookiePal support with both service IDs. |
 | This website already belongs to service #… | Another service already has this website. Terminate that service first, or cancel the new order. |
 | The website … is already on this client's CookiePal customer, but it's inactive in CookiePal | The website was deactivated in CookiePal, and Create can't reactivate it. Contact CookiePal support to reactivate or remove it, then run Create again. |
 | CookiePal won't remove … because it's the customer's only active website, and service #… still uses that customer | The other service's website isn't active in CookiePal, so CookiePal keeps this one. Terminate the other service first, then run Terminate again on this one; or contact CookiePal support. |
