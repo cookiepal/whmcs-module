@@ -56,7 +56,8 @@ final class Module
             $domain = Hostname::website(self::stringParam($params, 'domain'));
             $plan = Plan::fromParams($params);
             $api = self::api($params, 'CreateAccount');
-            // Run again after a lost answer, either create answers 200 with its first body: saved like a 201.
+            // Run again after a lost answer, either create answers 200 with the website its first call made, which
+            // is moved to this Create's plan if the product's plan changed in between, then saved like a 201.
             $key = IdempotencyKey::forCreate($serviceId, $existing);
 
             // A second order from the same client, on the same CookiePal server, adds a website to its customer.
@@ -88,6 +89,7 @@ final class Module
                 $api,
                 $store,
                 $params,
+                $serviceId,
                 $serverId,
                 $clientId,
                 $domain,
@@ -125,7 +127,16 @@ final class Module
     {
         return self::run('UnsuspendAccount', $params, function () use ($params): string {
             $record = self::liveRecord($params);
-            self::api($params, 'UnsuspendAccount')->unsuspend($record->customerId, $record->domainId);
+            try {
+                self::api($params, 'UnsuspendAccount')->unsuspend($record->customerId, $record->domainId);
+            } catch (ApiException $e) {
+                if ($e->is(409, 'SCHEDULED_FOR_DELETION')) {
+                    throw new ModuleException(
+                        'This CookiePal website is scheduled for deletion, so it can\'t be unsuspended.'
+                    );
+                }
+                throw $e;
+            }
 
             return 'success';
         });
@@ -544,7 +555,7 @@ final class Module
         ?string $idempotencyKey
     ): ?string {
         try {
-            return self::domainIdFrom($api->addDomain($customerId, $domain, $plan, $idempotencyKey));
+            $result = $api->addDomain($customerId, $domain, $plan, $idempotencyKey);
         } catch (ApiException $e) {
             if ($e->is(409, 'DOMAIN_EXISTS')) {
                 return self::confirmExistingDomain($api, $store, $customerId, $domain, $plan, $serviceId, $e);
@@ -557,12 +568,16 @@ final class Module
             }
             throw $e;
         }
+
+        // After the try: a 404 from a replay's plan call must fail the Create, not read as "the customer is gone".
+        return self::createdDomainId($api, $store, $customerId, $result, $plan, $serviceId);
     }
 
     /**
      * The client's live service recorded on another WHMCS server, when this server's key owns its customer: the
-     * service was moved to another server record, or two server records hold the same agency key. Null when the
-     * key doesn't own it (401: another agency's customer) or it's gone (404); then Create starts a new customer.
+     * service was moved to another server record, two server records hold the same agency key, or its row was
+     * left at server 0 (ServiceStore::addServerId). Null when the key doesn't own it (401: another agency's
+     * customer) or it's gone (404); then Create starts a new customer.
      */
     private static function ownedOnOtherServer(
         ApiClient $api,
@@ -619,6 +634,19 @@ final class Module
             );
         }
         $domainId = (string) $found['domainId'];
+        self::refuseAnotherServicesWebsite($store, $customerId, $domainId, $serviceId);
+        self::setPlan($api, $customerId, $domainId, $plan);
+
+        return $domainId;
+    }
+
+    /** A website that another live service already has is never given to this one. */
+    private static function refuseAnotherServicesWebsite(
+        ServiceStore $store,
+        string $customerId,
+        string $domainId,
+        int $serviceId
+    ): void {
         $owner = $store->findOtherLiveForWebsite($customerId, $domainId, $serviceId);
         if ($owner !== null) {
             throw new ModuleException(
@@ -626,16 +654,13 @@ final class Module
                 . 'or cancel this order.'
             );
         }
-        self::setPlan($api, $customerId, $domainId, $plan);
-
-        return $domainId;
     }
 
     /**
      * POST /external/customer for a client with no live CookiePal service. A 409 is never taken as
      * "this agency already has it": the API answers the same for a domain on any other customer,
      * and that customer must not end up on this service. A lost answer is recovered by the API instead:
-     * the same idempotency key gets the first answer back as a 200.
+     * the same idempotency key gets the first call's customer and website back as a 200.
      *
      * @param array<string, mixed> $params
      *
@@ -645,6 +670,7 @@ final class Module
         ApiClient $api,
         ServiceStore $store,
         array $params,
+        int $serviceId,
         int $serverId,
         int $clientId,
         string $domain,
@@ -678,12 +704,20 @@ final class Module
             }
             $elsewhereLive = $clientId > 0 ? $store->findLiveForClientOnOtherServer($clientId, $serverId) : null;
             if ($elsewhereLive !== null) {
-                // The client's CookiePal user belongs to another server's agency key; this one can't reuse it.
+                // The client's CookiePal user belongs to another agency key; this server's key can't reuse it.
+                $through = 'The email ' . $email . ' already has a CookiePal account through this client\'s service #'
+                    . $elsewhereLive->serviceId;
+                if ($elsewhereLive->serverId === 0) {
+                    // A row from before the table had server_id, of a service WHMCS has on no server now.
+                    throw new ModuleException(
+                        $through . ', which WHMCS no longer has on a server, and this server\'s API key doesn\'t own '
+                        . 'that account. Contact CookiePal support (' . self::SUPPORT_EMAIL . ') with both service IDs.'
+                    );
+                }
                 throw new ModuleException(
-                    'The email ' . $email . ' already has a CookiePal account through this client\'s service #'
-                    . $elsewhereLive->serviceId . ', which is on another CookiePal server (WHMCS server #'
-                    . $elsewhereLive->serverId . '). Put the client\'s CookiePal products on the same server, or '
-                    . 'contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
+                    $through . ', which is on another CookiePal server (WHMCS server #' . $elsewhereLive->serverId
+                    . '). Put the client\'s CookiePal products on the same server, or contact CookiePal support ('
+                    . self::SUPPORT_EMAIL . ').'
                 );
             }
             $recent = self::recentlyTerminated($store, $clientId, null);
@@ -710,7 +744,39 @@ final class Module
             throw new ApiException(201, 'CookiePal returned no customerId.', ApiException::BAD_RESPONSE);
         }
 
-        return [$customerId, self::domainIdFrom($result)];
+        return [$customerId, self::createdDomainId($api, $store, $customerId, $result, $plan, $serviceId)];
+    }
+
+    /**
+     * The `domain.domainId` of a create's answer, once the website can be saved. Call it straight after the
+     * create: it reads that call's status.
+     *
+     * A 201 is a new website on the plan sent. A 200 replays an earlier call that had the same key: the website
+     * is the one that call made, on the plan it has now, because CookiePal doesn't apply the plan sent again.
+     * It is completed like a domain found on the customer (confirmExistingDomain): refused when another service
+     * has it, then moved to this Create's plan when it's on another. Either failure is thrown before anything is
+     * saved, so running Create again replays the answer and tries again.
+     *
+     * @param array<mixed> $result
+     */
+    private static function createdDomainId(
+        ApiClient $api,
+        ServiceStore $store,
+        string $customerId,
+        array $result,
+        string $plan,
+        int $serviceId
+    ): string {
+        $domainId = self::domainIdFrom($result);
+        if ($api->lastStatus() !== 200) {
+            return $domainId;
+        }
+        self::refuseAnotherServicesWebsite($store, $customerId, $domainId, $serviceId);
+        if (Plan::fromApi($result['domain']['plan'] ?? null) !== $plan) {
+            self::setPlan($api, $customerId, $domainId, $plan);
+        }
+
+        return $domainId;
     }
 
     /** The client's service for this domain (or any, for a null domain) terminated in the last two days. */

@@ -85,6 +85,27 @@ final class SuspendAndChangePackageTest extends ModuleTestCase
         $this->assertSame('success', cookiepal_UnsuspendAccount($this->params()));
     }
 
+    public function testUnsuspendingAWebsiteScheduledForDeletionIsAClearMessage(): void
+    {
+        $this->seedService();
+        $this->transport->expect('DELETE', $this->domainPath('/suspension'), 409, [
+            'message' => 'Domain is scheduled for deletion', 'code' => 'SCHEDULED_FOR_DELETION',
+        ]);
+
+        $this->assertSame(
+            "This CookiePal website is scheduled for deletion, so it can't be unsuspended.",
+            cookiepal_UnsuspendAccount($this->params())
+        );
+    }
+
+    public function testUnsuspendReportsAnyOtherConflictAsItIs(): void
+    {
+        $this->seedService();
+        $this->transport->expect('DELETE', $this->domainPath('/suspension'), 409, ['message' => 'Conflict']);
+
+        $this->assertSame('CookiePal API error (409): Conflict', cookiepal_UnsuspendAccount($this->params()));
+    }
+
     public function testUnsuspendReportsOwnership(): void
     {
         $this->seedService();

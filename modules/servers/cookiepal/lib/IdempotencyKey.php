@@ -9,8 +9,9 @@ if (!defined('WHMCS')) {
 }
 
 /**
- * The `idempotencyKey` Create sends, so that running it again after a lost answer gets CookiePal's first
- * answer back (a 200 with the same body) instead of a 409. It isn't a secret: it's in the Module Log.
+ * The `idempotencyKey` Create sends, so that running it again after a lost answer gets the website the first
+ * call made (a 200 with the first answer's fields, and the plan the website has now) instead of a 409. It isn't
+ * a secret: it's in the Module Log.
  */
 final class IdempotencyKey
 {
