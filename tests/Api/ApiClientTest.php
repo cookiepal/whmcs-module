@@ -66,6 +66,26 @@ final class ApiClientTest extends TestCase
         );
     }
 
+    public function testTheLastStatusTellsAReplayFromANewCreate(): void
+    {
+        $this->transport
+            ->expect('POST', '/external/domain', 201, $this->addedDomainBody('example.org'))
+            ->expect('POST', '/external/domain', 200, $this->addedDomainBody('example.org'))
+            ->expect('POST', '/external/domain', 409, ['message' => 'domain already exists'])
+            ->expectNetworkError('POST', '/external/domain');
+        $client = $this->client();
+
+        $this->assertSame(0, $client->lastStatus());
+        $client->addDomain(self::CUSTOMER, 'example.org', 'starter');
+        $this->assertSame(201, $client->lastStatus());
+        $client->addDomain(self::CUSTOMER, 'example.org', 'starter');
+        $this->assertSame(200, $client->lastStatus());
+        $this->catch(fn () => $client->addDomain(self::CUSTOMER, 'example.org', 'starter'));
+        $this->assertSame(409, $client->lastStatus());
+        $this->catch(fn () => $client->addDomain(self::CUSTOMER, 'example.org', 'starter'));
+        $this->assertSame(0, $client->lastStatus());
+    }
+
     public function testWritesWait30SecondsAndReads20(): void
     {
         $this->transport
