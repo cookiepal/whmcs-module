@@ -102,8 +102,9 @@ Open **Configuration > System Logs > Module Log** and turn on debug logging, rep
 | The email … already has its own CookiePal account. | The client already uses CookiePal on their own. Ask CookiePal support to link that account to your agency, then run Create again. |
 | This client's CookiePal service #… was terminated on …, and CookiePal is still removing it / The website … is being removed from CookiePal | The client's earlier service for this website or account was terminated, and CookiePal deletes it a day later. Run Create again the next day, or contact CookiePal support. |
 | The email … belongs to the CookiePal customer of this client's service #…, which CookiePal kept | That service was terminated recently, but its CookiePal customer stays because it has other websites, so its email can't start a new customer. Contact CookiePal support with both service IDs. |
-| The email … already has a CookiePal account through this client's service #…, which is on another CookiePal server | A client's CookiePal services share one CookiePal customer, which belongs to the agency key of the server the first one was created on. Put the client's CookiePal products on the same server, or contact CookiePal support. |
+| The email … already has a CookiePal account through this client's service #…, which is on another CookiePal server | A client's CookiePal services share one CookiePal customer, which belongs to the agency key of the server the first one was created on. Create checks first whether this server's key owns that customer, so a service moved to another server record, or two servers with the same key, work as one; this message means the key doesn't. Put the client's CookiePal products on the same server, or contact CookiePal support. |
 | This website already belongs to service #… | Another service already has this website. Terminate that service first, or cancel the new order. |
+| The website … is already on this client's CookiePal customer, but it's inactive in CookiePal | The website was deactivated in CookiePal, and Create can't reactivate it. Contact CookiePal support to reactivate or remove it, then run Create again. |
 | CookiePal won't remove … because it's the customer's only active website, and service #… still uses that customer | The other service's website isn't active in CookiePal, so CookiePal keeps this one. Terminate the other service first, then run Terminate again on this one; or contact CookiePal support. |
 | The customer pays for this website's plan in CookiePal themselves | The client upgraded inside CookiePal, so the plan is no longer yours to change. |
 | This website has more traffic than the free plan allows. | Choose a paid plan. |
@@ -116,7 +117,7 @@ If Create fails with "Couldn't reach CookiePal", or with a CookiePal API error 5
 
 If the retry answers that the email already has its own CookiePal account, or that the domain is registered to another account, CookiePal didn't match it to the first request: the first request may have created them, or they may belong to someone else. CookiePal support can tell which, and finish the setup. Contact [support@cookiepal.io](mailto:support@cookiepal.io) with the service ID and the domain.
 
-Every WHMCS error message is also in the WHMCS Activity Log.
+Every WHMCS error message is also in the WHMCS Activity Log. One Activity Log line isn't an error: "CookiePal: service #… is terminated, but CookiePal didn't delete its inactive website … on customer …" means Terminate ended the service, but CookiePal refused to delete its website, which was already inactive. The website stays on that customer, inactive. Contact CookiePal support if it should go.
 
 ## Development
 
