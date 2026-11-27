@@ -33,7 +33,7 @@ $_LANG['sso_unavailable'] = 'We couldn\'t open your CookiePal dashboard right no
     . 'or contact us.';
 $_LANG['pending'] = 'Your CookiePal banner is being set up. Check back in a few minutes.';
 $_LANG['terminated'] = 'This CookiePal service has ended.';
-$_LANG['missing'] = 'This website is no longer on CookiePal. Contact us if you think this is wrong.';
+$_LANG['missing'] = 'This website is no longer linked to your hosting account. Contact us if you think this is wrong.';
 $_LANG['error'] = 'We couldn\'t load your CookiePal details right now. Try again later.';
 $_LANG['unavailable'] = 'We can\'t load your CookiePal details because of a problem on our side. Contact us so we can '
     . 'fix it.';
