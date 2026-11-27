@@ -57,7 +57,7 @@ To sell one product with a choice of plans instead, add a configurable option na
 | **Suspend** | Switches the banner off on the website. Nothing else changes, so Unsuspend brings it back exactly as it was. |
 | **Unsuspend** | Switches the banner back on. |
 | **Upgrade / Downgrade** (Change Package) | Changes the website's plan to the new product's plan. |
-| **Terminate** | Removes the website. When it is the CookiePal customer's last active website and no other live service uses that customer, the whole customer is removed. CookiePal deletes what was removed a day later. |
+| **Terminate** | Removes the website. When it is the CookiePal customer's last active website and no other live service uses that customer, the whole customer is removed, unless the customer also has websites your agency doesn't manage: then only the website is removed. CookiePal deletes what was removed a day later. |
 | **Start scan** (admin button) | Starts a cookie scan of the website. The banner must be installed and verified first. |
 | **Refresh status** (admin button) | Reads the website from CookiePal again. |
 
@@ -118,7 +118,11 @@ If Create fails with "Couldn't reach CookiePal", or with a CookiePal API error 5
 
 If the retry answers that the email already has its own CookiePal account, or that the domain is registered to another account, CookiePal didn't match it to the first request: the first request may have created them, or they may belong to someone else. CookiePal support can tell which, and finish the setup. Contact [support@cookiepal.io](mailto:support@cookiepal.io) with the service ID and the domain.
 
-Every WHMCS error message is also in the WHMCS Activity Log. One Activity Log line isn't an error: "CookiePal: service #… is terminated, but CookiePal didn't delete its inactive website … on customer …" means Terminate ended the service, but CookiePal refused to delete its website, which was already inactive. The website stays on that customer, inactive. Contact CookiePal support if it should go.
+Every WHMCS error message is also in the WHMCS Activity Log. These Activity Log lines aren't errors: Terminate ended the service, and the line says why CookiePal didn't delete its website.
+
+- "CookiePal: service #… is terminated, but CookiePal didn't delete its inactive website … on customer …": CookiePal refused to delete the website, which was already inactive. The website stays on that customer, inactive. Contact CookiePal support if it should go.
+- "… didn't delete its website … because it's the customer's only active website and the customer has websites your agency doesn't manage": CookiePal keeps a customer's last active website, and the customer's other websites aren't yours to remove. The website stays in CookiePal, active. Contact CookiePal support if it should go.
+- "… didn't delete its website … because it's no longer linked to your agency", or "… is terminated without a call to CookiePal: its website … is no longer among your agency's websites": the website was already removed, or now belongs to another agency or to the customer, so it isn't yours to remove.
 
 ## Development
 
