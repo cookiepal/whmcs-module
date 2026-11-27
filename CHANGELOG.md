@@ -10,6 +10,9 @@ The first release.
 - Create, suspend, unsuspend, change package and terminate CookiePal websites through the CookiePal agency API.
 - One CookiePal customer per WHMCS client and CookiePal server: the client's later services on that server add websites
   to it. Terminate never removes a customer that another live service still uses.
+- When the CookiePal customer also has websites your agency doesn't manage, Terminate removes only the service's
+  website. When CookiePal keeps that website (it's the customer's only active one, or it's no longer linked to your
+  agency), the service still ends and the Activity Log says why.
 - Running Create again on a service that already has its website succeeds without a call, and never creates a second
   website. Create sends an idempotency key, built from the WHMCS System URL and the service ID, so once the CookiePal
   API accepts it, running Create again after a lost answer completes the first request and moves the website to the

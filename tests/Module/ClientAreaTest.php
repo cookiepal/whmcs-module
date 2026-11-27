@@ -254,7 +254,7 @@ final class ClientAreaTest extends ModuleTestCase
 
         $html = $this->render(cookiepal_ClientArea($this->params()));
 
-        $this->assertStringContainsString('This website is no longer on CookiePal.', $html);
+        $this->assertStringContainsString('This website is no longer linked to your hosting account.', $html);
         $this->assertStringNotContainsString('dosinglesignon', $html);
     }
 

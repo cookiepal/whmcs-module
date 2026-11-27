@@ -93,7 +93,7 @@ final class AdminAreaTest extends ModuleTestCase
         $this->transport->expect('GET', $this->customerPath(), 200, $this->customerBody([]));
 
         $this->assertSame(
-            'This website is no longer on the CookiePal customer.',
+            'This website is no longer on the CookiePal customer, or no longer linked to your agency.',
             cookiepal_AdminServicesTabFields($this->params())['CookiePal status']
         );
     }
@@ -204,7 +204,7 @@ final class AdminAreaTest extends ModuleTestCase
         $this->transport->expect('GET', $this->customerPath(), 200, $this->customerBody([]));
 
         $this->assertSame(
-            'The website example.com is no longer on this CookiePal customer.',
+            'The website example.com is no longer on this CookiePal customer, or no longer linked to your agency.',
             cookiepal_RefreshStatus($this->params())
         );
     }

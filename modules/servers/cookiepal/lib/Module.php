@@ -20,6 +20,9 @@ final class Module
     public const VERSION = '1.0.0';
     public const SUPPORT_EMAIL = 'support@cookiepal.io';
 
+    /** The API's 401 message for a website this agency doesn't hold. Other 401s have other messages. */
+    private const NOT_LINKED_TO_AGENCY = 'This website is not linked to your agency.';
+
     /** CookiePal deletes a removed customer or website a day later; this allows for the deletion running late. */
     private const REMOVAL_WINDOW_SECONDS = 2 * 86400;
 
@@ -156,7 +159,8 @@ final class Module
 
     /**
      * Removes the service's website, or its whole CookiePal customer when nothing else uses it.
-     * The customer is never deleted while another live service of this WHMCS points at it.
+     * The customer is never deleted while another live service of this WHMCS points at it, and CookiePal
+     * refuses to delete one that has websites this agency doesn't manage: then only the website goes.
      *
      * @param array<string, mixed> $params
      */
@@ -191,42 +195,99 @@ final class Module
             $sharedWith = $store->findOtherLiveOnCustomer($record->customerId, $serviceId);
 
             if ($sharedWith === null && $otherActive === []) {
-                self::ignoreNotFound(fn () => $api->deleteCustomer($record->customerId));
-            } elseif ($own !== null && !self::isBeingRemoved($own)) {
                 try {
-                    self::ignoreNotFound(fn () => $api->deleteDomain($record->customerId, $record->domainId));
+                    self::ignoreNotFound(fn () => $api->deleteCustomer($record->customerId));
                 } catch (ApiException $e) {
-                    if (!self::isUsable($own) && $e->is(400)) {
-                        // An inactive website the API won't delete: its "only active domain" check can count against
-                        // it when exactly one other website is active. The service ends; the website stays inactive.
-                        // Any 400 counts, since the route's other 400 has no code to tell them apart.
-                        Logger::activity(
-                            'service #' . $serviceId . ' is terminated, but CookiePal didn\'t delete its inactive '
-                            . 'website ' . $record->domainId . ' on customer ' . $record->customerId . ': '
-                            . $e->adminMessage()
-                        );
-                        $store->markTerminated($serviceId);
-
-                        return 'success';
-                    }
-                    if ($sharedWith === null || !$e->is(400, 'ONLY_ACTIVE_DOMAIN')) {
+                    if (!$e->is(409, 'CUSTOMER_HAS_OTHER_WEBSITES')) {
                         throw $e;
                     }
-                    // The other service's website isn't active in CookiePal, so this is the customer's
-                    // only active one. Terminating that service first lets this one remove the customer.
-                    throw new ModuleException(
-                        'CookiePal won\'t remove ' . $record->domainId . ' because it\'s the customer\'s only '
-                        . 'active website, and service #' . $sharedWith->serviceId . ' still uses that customer. '
-                        . 'Terminate service #' . $sharedWith->serviceId . ' first, then run Terminate again, '
-                        . 'or contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
-                    );
+                    // The customer also has websites this agency doesn't manage, which the GET doesn't list and
+                    // which keep the customer. Only the service's own website goes.
+                    if ($own === null) {
+                        Logger::activity(
+                            'service #' . $serviceId . ' is terminated without a call to CookiePal: its website '
+                            . $record->domainId . ' is no longer among your agency\'s websites on customer '
+                            . $record->customerId . ', and that customer has websites your agency doesn\'t manage.'
+                        );
+                    } elseif (!self::isBeingRemoved($own)) {
+                        self::deleteWebsite($api, $serviceId, $record, $own, null, true);
+                    }
                 }
+            } elseif ($own !== null && !self::isBeingRemoved($own)) {
+                self::deleteWebsite($api, $serviceId, $record, $own, $sharedWith, false);
             }
 
             $store->markTerminated($serviceId);
 
             return 'success';
         });
+    }
+
+    /**
+     * DELETE /external/domain for the service's website. Returns when the service can end: the website is
+     * deleted, already gone, or kept by CookiePal for a reason this writes to the Activity Log.
+     *
+     * @param array<mixed> $own the website's item from the customer GET
+     * @param bool $customerHasOtherWebsites the customer delete was refused because the customer has websites
+     *     this agency doesn't manage
+     */
+    private static function deleteWebsite(
+        ApiClient $api,
+        int $serviceId,
+        ServiceRecord $record,
+        array $own,
+        ?ServiceRecord $sharedWith,
+        bool $customerHasOtherWebsites
+    ): void {
+        try {
+            self::ignoreNotFound(fn () => $api->deleteDomain($record->customerId, $record->domainId));
+        } catch (ApiException $e) {
+            $kept = 'service #' . $serviceId . ' is terminated, but CookiePal didn\'t delete its ';
+            if ($e->is(401) && $e->getMessage() === self::NOT_LINKED_TO_AGENCY) {
+                // The website moved away from this agency between the GET and the delete. Any other 401 (no key,
+                // or a customer this key doesn't own) still fails.
+                Logger::activity(
+                    $kept . 'website ' . $record->domainId . ' on customer ' . $record->customerId
+                    . ', because it\'s no longer linked to your agency.'
+                );
+
+                return;
+            }
+            if (!self::isUsable($own) && $e->is(400)) {
+                // An inactive website the API won't delete: its "only active domain" check can count against
+                // it when exactly one other website is active. The service ends; the website stays inactive.
+                // Any 400 counts, since the route's other 400 has no code to tell them apart.
+                Logger::activity(
+                    $kept . 'inactive website ' . $record->domainId . ' on customer ' . $record->customerId . ': '
+                    . $e->adminMessage()
+                );
+
+                return;
+            }
+            if ($customerHasOtherWebsites && $e->is(400, 'ONLY_ACTIVE_DOMAIN')) {
+                // The customer's other websites, none of them this agency's, are all inactive. Neither delete is
+                // allowed, so the service ends and the website stays active in CookiePal.
+                Logger::activity(
+                    $kept . 'website ' . $record->domainId . ' on customer ' . $record->customerId
+                    . ', because it\'s the customer\'s only active website and the customer has websites your '
+                    . 'agency doesn\'t manage. The website stays in CookiePal. Contact CookiePal support ('
+                    . self::SUPPORT_EMAIL . ') if it should go.'
+                );
+
+                return;
+            }
+            if ($sharedWith === null || !$e->is(400, 'ONLY_ACTIVE_DOMAIN')) {
+                throw $e;
+            }
+            // The other service's website isn't active in CookiePal, so this is the customer's
+            // only active one. Terminating that service first lets this one remove the customer.
+            throw new ModuleException(
+                'CookiePal won\'t remove ' . $record->domainId . ' because it\'s the customer\'s only '
+                . 'active website, and service #' . $sharedWith->serviceId . ' still uses that customer. '
+                . 'Terminate service #' . $sharedWith->serviceId . ' first, then run Terminate again, '
+                . 'or contact CookiePal support (' . self::SUPPORT_EMAIL . ').'
+            );
+        }
     }
 
     /**
@@ -401,7 +462,10 @@ final class Module
         }
         $domain = self::findDomain($customer, $record->domainId);
         if ($domain === null) {
-            return $fields + ['CookiePal status' => 'This website is no longer on the CookiePal customer.'];
+            return $fields + [
+                'CookiePal status' => 'This website is no longer on the CookiePal customer, or no longer linked to '
+                    . 'your agency.',
+            ];
         }
 
         $facts = self::websiteFacts($domain);
@@ -454,7 +518,8 @@ final class Module
             $customer = self::api($params, 'RefreshStatus')->getCustomer($record->customerId);
             if (self::findDomain($customer, $record->domainId) === null) {
                 throw new ModuleException(
-                    'The website ' . $record->domainId . ' is no longer on this CookiePal customer.'
+                    'The website ' . $record->domainId . ' is no longer on this CookiePal customer, or no longer '
+                    . 'linked to your agency.'
                 );
             }
 
@@ -806,9 +871,10 @@ final class Module
 
     /**
      * What became of a recently terminated service's customer:
-     * - 'removing': gone (404), or no website keeps it (deleting a customer makes all its websites inactive).
+     * - 'removing': gone (404), or scheduled for deletion (the customer's own `scheduledDeletion`).
      *   A failed read counts too, which keeps the message shown before this check.
-     * - 'kept': it still has a website that keeps it.
+     * - 'kept': not scheduled for deletion. Its websites don't tell: the GET lists only this agency's, so a
+     *   customer kept by websites the agency doesn't manage can list none that are active.
      * - 'unknown': this key doesn't own it (401), so it says nothing about this agency's customers.
      *
      * @return 'removing'|'kept'|'unknown'
@@ -820,13 +886,9 @@ final class Module
         } catch (ApiException $e) {
             return $e->is(401) ? 'unknown' : 'removing';
         }
-        foreach (self::domainsOf($customer) as $domain) {
-            if (self::isUsable($domain)) {
-                return 'kept';
-            }
-        }
+        $scheduled = $customer['scheduledDeletion'] ?? null;
 
-        return 'removing';
+        return is_string($scheduled) && $scheduled !== '' ? 'removing' : 'kept';
     }
 
     /** Saves the new ids, and leaves them in the Activity Log if the save fails. */

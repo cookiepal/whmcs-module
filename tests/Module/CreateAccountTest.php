@@ -774,6 +774,18 @@ final class CreateAccountTest extends ModuleTestCase
             . 'CookiePal support (support@cookiepal.io).';
     }
 
+    /**
+     * GET /external/customers/{c} for a customer scheduled for deletion.
+     *
+     * @param list<array<string, mixed>> $domains
+     *
+     * @return array<string, mixed>
+     */
+    private function scheduledCustomerBody(array $domains): array
+    {
+        return $this->customerBody($domains) + ['scheduledDeletion' => '2026-11-27T10:00:00Z'];
+    }
+
     /** @return array<string, array{int}> */
     public static function agesWithinTheRemovalWindow(): array
     {
@@ -854,7 +866,7 @@ final class CreateAccountTest extends ModuleTestCase
         $this->seedService(100, 7, self::CUSTOMER, 'first.com', $terminatedAt);
         $this->transport
             ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
-            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+            ->expect('GET', $this->customerPath(), 200, $this->scheduledCustomerBody([
                 $this->domainItem('first.com', ['scheduledDeletion' => '2026-11-27T10:00:00Z']),
                 $this->domainItem('old.com', ['status' => 'inactive']),
             ]));
@@ -865,17 +877,63 @@ final class CreateAccountTest extends ModuleTestCase
 
     public function testAnEmailOnACustomerWhoseWebsitesAreAllInactiveSaysToWait(): void
     {
-        // Deleting a customer makes its websites inactive without scheduling them.
+        // Deleting a customer dates the customer and makes its websites inactive without dating them.
         $terminatedAt = ServiceStore::now(-3600);
         $this->seedService(100, 7, self::CUSTOMER, 'first.com', $terminatedAt);
         $this->transport
             ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
-            ->expect('GET', $this->customerPath(), 200, $this->customerBody([
+            ->expect('GET', $this->customerPath(), 200, $this->scheduledCustomerBody([
                 $this->domainItem('first.com', ['status' => 'inactive']),
                 $this->domainItem('shop.example.org', ['status' => 'inactive']),
             ]));
 
         $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
+    }
+
+    public function testAnEmailOnAScheduledCustomerThatStillListsAnActiveWebsiteSaysToWait(): void
+    {
+        // The customer's own date decides, whatever its websites show.
+        $terminatedAt = ServiceStore::now(-3600);
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', $terminatedAt);
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect('GET', $this->customerPath(), 200, $this->scheduledCustomerBody([
+                $this->domainItem('first.com'),
+            ]));
+
+        $this->assertSame(self::stillRemoving(100, $terminatedAt), cookiepal_CreateAccount($this->params()));
+    }
+
+    /** @return array<string, array{list<array<string, mixed>>}> */
+    public static function websitesOfACustomerKeptByOthers(): array
+    {
+        return [
+            'none listed' => [[]],
+            'only its own, being removed' => [[
+                ['domainId' => 'first.com', 'status' => 'inactive', 'scheduledDeletion' => '2026-11-27T10:00:00Z'],
+            ]],
+            'only inactive ones' => [[['domainId' => 'first.com', 'status' => 'inactive']]],
+        ];
+    }
+
+    /** @param list<array<string, mixed>> $domains */
+    #[DataProvider('websitesOfACustomerKeptByOthers')]
+    public function testAnEmailOnACustomerKeptByWebsitesTheAgencyDoesNotManageSaysSo(array $domains): void
+    {
+        // Terminate removed only first.com: the customer has websites this agency doesn't manage, which the
+        // GET doesn't list, and isn't scheduled for deletion. Waiting a day changes nothing.
+        $this->seedService(100, 7, self::CUSTOMER, 'first.com', ServiceStore::now(-3600));
+        $this->transport
+            ->expect('POST', '/external/customer', 409, self::USER_EXISTS)
+            ->expect('GET', $this->customerPath(), 200, $this->customerBody($domains));
+
+        $this->assertSame(
+            "The email ada@example.com belongs to the CookiePal customer of this client's service #100, which "
+            . 'CookiePal kept when that service was terminated because it has other websites. Contact CookiePal '
+            . 'support (support@cookiepal.io) with both service IDs.',
+            cookiepal_CreateAccount($this->params())
+        );
+        $this->assertNull($this->row(101));
     }
 
     public function testAnEmailOnARecentCustomerThisKeyDoesNotOwnGetsThePlainMessage(): void
